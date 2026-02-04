@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.2
+# Gold Release v1.0.0
 #
 # Backup & restore script for blockchain nodes on TrueNAS
 #
@@ -10,15 +10,6 @@
 #   - bitcoind
 #   - monerod
 #   - chia
-#
-# Supported long flags:
-#   --mode:     backup|merge|verify|restore
-#   --service:  bitcoind|monerod|chia
-#   --debug
-#   --dry-run
-#   --force
-#   --init-config
-#   --help
 #
 # Design goals:
 #   - deterministic
@@ -38,40 +29,27 @@ set -Eeuo pipefail
 # Globals / Defaults
 ########################################
 
-MODE="backup"                   # backup | merge | verify | restore
-SERVICE=""                      # bitcoind|monerod|chia
+MODE="${MODE:-backup}"            # backup | restore | merge | verify
+SERVICE="${SERVICE:-}"
 POOL="${POOL:-}"
 DATASET="${DATASET:-}"
-SRCDIR="${SRCDIR:-$SRC_BASE/$SERVICE}"
-DESTDIR="${DESTDIR:-$DEST_BASE/$SERVICE}"
-FS_TYPE="${FS_TYPE:-unknown}"
+SRCDIR="${SRCDIR:-}"
+DESTDIR="${DESTDIR:-}"
+
+FORCE="${FORCE:-false}"
+DEBUG="${DEBUG:-false}"
+DRY_RUN="${DRY_RUN:-false}"
+
 RSYNC_EXCLUDES=(
-  --exclude=.zfs
-  --exclude=.zfs/*
-  --exclude=.snapshot
+  --exclude='.zfs'
+  --exclude='.zfs/'
+  --exclude='.zfs/*'
+  --exclude='.snapshot/'
 )
+RSYNC_OPTS="${RSYNC_OPTS:--avihH --numeric-ids ${RSYNC_EXCLUDES} --delete --stats --info=progress2}"
 
-RSYNC_OPTS=(-avihH --numeric-ids --delete --stats --info=progress2)
-
-LOGFILE="${LOGFILE:-/var/log/backup_blockchain_truenas.log}"
+LOGFILE="${SCLOGFILE:-/var/log/backup_blockchain_truenas.log}"
 STATEFILE="/var/log/backup_blockchain_truenas.state"
-
-declare -A SERVICE_CT_MAP=(
-  [bitcoind]="ix-bitcoind-bitcoind-1"
-  [monerod]="ix-monerod-monerod-1"
-  [chia]="ix-chia-farmer-1"
-)
-CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
-TELEMETRY_ENABLED=false
-TELEMETRY_BACKEND=""
-
-# Runtime flags:
-# These MUST NOT be set via config files.
-# CLI / environment only.
-FORCE=false
-DEBUG=false
-DRY_RUN=false
-INIT_CONFIG=false
 
 ########################################
 # Logging helpers
@@ -131,8 +109,6 @@ load_config() {
     done
 }
 
-# Load configuration files (order matters)
-#   default.conf → machine.conf → $THIS_HOST.conf
 load_config_chain() {
     local cfg
 
@@ -154,6 +130,10 @@ apply_overrides() {
     [ -n "${DATASET+x}" ] && DATASET="$DATASET"
     [ -n "${SRCDIR+x}"  ] && SRCDIR="$SRCDIR"
     [ -n "${DESTDIR+x}" ] && DESTDIR="$DESTDIR"
+
+    [ -n "${FORCE+x}"   ] && FORCE="$FORCE"
+    [ -n "${DEBUG+x}"   ] && DEBUG="$DEBUG"
+    [ -n "${DRY_RUN+x}" ] && DRY_RUN="$DRY_RUN"
 }
 
 ########################################
@@ -213,7 +193,9 @@ backup_blockchain() {
     fi
 
     log "Starting rsync from '${SRCDIR}/' to '${DESTDIR}/'"
-    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "${SRCDIR}/" "${DESTDIR}/"
+    rsync $RSYNC_OPTS "${SRCDIR}/" "${DESTDIR}/" \
+        || fatal "rsync backup failed"
+
 rsync_exit=$?
 
 case "$rsync_exit" in
@@ -221,10 +203,11 @@ case "$rsync_exit" in
     log "rsync completed successfully"
     ;;
   23|24)
-    warn "rsync completed with warnings (code=$rsync_exit)"
+    warn "rsync completed with warnings (code=$rsync_exit) – acceptable"
     ;;
   *)
-    fatal "rsync failed (code=$rsync_exit)"
+    err "rsync failed (code=$rsync_exit)"
+    return 1
     ;;
 esac
 
@@ -270,42 +253,6 @@ merge_dirs() {
     log "merge_dirs(): done"
 }
 
-verify_backup() {
-    log "verify_backup(): start"
-
-    [ -d "$SRCDIR" ]  || fatal "Source directory missing: $SRCDIR"
-    [ -d "$DESTDIR" ] || fatal "Backup directory missing: $DESTDIR"
-
-    log "Verifying structure and size"
-
-    local src_size dst_size
-    src_size="$(du -sb "$SRCDIR"  | awk '{print $1}')"
-    dst_size="$(du -sb "$DESTDIR" | awk '{print $1}')"
-
-    log "Source size: $src_size bytes"
-    log "Backup size: $dst_size bytes"
-
-    if [[ "$src_size" -ne "$dst_size" ]]; then
-        warn "Size mismatch detected"
-    else
-        log "Size check OK"
-    fi
-
-    log "Running rsync dry-run (no delete)"
-    rsync -navc \
-        "${RSYNC_EXCLUDES[@]}" \
-        "$SRCDIR/" "$DESTDIR/" \
-        >/tmp/verify-${SERVICE}.log \
-        || warn "rsync verify reported differences"
-
-    if grep -q '^>' /tmp/verify-${SERVICE}.log; then
-        warn "Verify found differences"
-        return 10
-    fi
-
-    log "verify_backup(): done"
-}
-
 ########################################
 # Metrics / audit
 ########################################
@@ -313,172 +260,13 @@ verify_backup() {
 collect_metrics() {
     local runtime="$1"
     local diskusage
-    local src_size dst_size
 
-    src_size="$(du -sb "$SRCDIR" 2>/dev/null | awk '{print $1}')"
-    dst_size="$(du -sb "$DESTDIR" 2>/dev/null | awk '{print $1}')"
     diskusage="$(du -shL "$SRCDIR" 2>/dev/null | awk '{print $1}')"
 
     state_set last_run_service   "$SERVICE"
     state_set last_run_mode      "$MODE"
-    state_set last_run_diskusage "$diskusage"
     state_set last_run_runtime_s "$runtime"
-    state_set last_run_exit_code "$exit_code"
-
-    $TELEMETRY_ENABLED && send_telemetry \
-        "$runtime" "$exit_code" "$src_size" "$dst_size"
-}
-
-send_telemetry() {
-    local runtime="$1" exit="$2" src="$3" dst="$4"
-
-    case "$TELEMETRY_BACKEND" in
-        influx)
-            curl -sS -XPOST "$INFLUX_URL/write?db=$INFLUX_DB" \
-              --data-binary \
-              "backup,host=$THIS_HOST,service=$SERVICE,mode=$MODE runtime=${runtime},exit=${exit},src=${src},dst=${dst}"
-            ;;
-        *)
-            warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
-            ;;
-    esac
-}
-
-detect_fs_type() {
-  FS_TYPE="$(stat -f -c %T "$SRCDIR")"
-}
-
-init_config() {
-  log "Initializing config files"
-
-  local host
-  host="$(hostname -s)"
-
-  create_cfg "default.conf"   default
-  create_cfg "machine.conf"   machine
-  create_cfg "${host}.conf"   host
-
-  log "Config initialization complete"
-  log "Edit the files and rerun without --init-config"
-}
-
-create_cfg() {
-  local file="$1"
-  local type="$2"
-
-  if [[ -f "$file" ]]; then
-    warn "Config already exists, skipping: $file"
-    return
-  fi
-
-  log "Creating $file"
-
-  case "$type" in
-    default)
-      cat >"$file" <<'EOF'
-# default.conf
-# Lowest priority config
-
-MODE=backup
-DRY_RUN=true
-
-RSYNC_OPTS="-avihH --numeric-ids --delete --stats --info=progress2"
-EOF
-      ;;
-    machine)
-      cat >"$file" <<'EOF'
-# machine.conf
-# Machine-wide settings
-
-POOL="tank"
-DATASET="blockchain"
-
-SRC_BASE="/mnt/tank/blockchain"
-DEST_BASE="/mnt/tank/backups"
-
-USE_USB=false
-USB_ID=""
-USB_MOUNT="/mnt/usb"
-EOF
-      ;;
-    host)
-      cat >"$file" <<'EOF'
-# Host-specific config
-# Last in precedence chain
-
-# Example:
-# SERVICE="bitcoind"
-# LOGFILE="/var/log/backup_blockchain_truenas.log"
-EOF
-      ;;
-    *)
-      fatal "Unknown config type: $type"
-      ;;
-  esac
-}
-
-parse_cli() {
-  local OPTIONS
-  OPTIONS=$(getopt -o '' \
-    --long mode:,service:,debug,dry-run,force,help \
-    -- "$@") || exit 1
-
-  eval set -- "$OPTIONS"
-
-  while true; do
-    case "$1" in
-      --mode)
-        MODE="$2"
-        shift 2
-        ;;
-      --service)
-        SERVICE="$2"
-        shift 2
-        ;;
-      --debug)
-        DEBUG=true
-        shift
-        ;;
-      --dry-run)
-        DRY_RUN=true
-        shift
-        ;;
-      --force)
-        FORCE=true
-        shift
-        ;;
-        --init-config)
-        INIT_CONFIG=true
-        shift
-        ;;
-      --help)
-        usage
-        exit 0
-        ;;
-      --)
-        shift
-        break
-        ;;
-      *)
-        fatal "Unknown option: $1"
-        ;;
-    esac
-  done
-}
-
-usage() {
-  cat <<EOF
-Usage: $0 [options]
-
-Options:
-  --mode         <backup|merge|verify|restore>
-  --service      <bitcoind|monerod|chia>
-  --debug        Enable bash xtrace
-  --dry-run      Do not modify anything
-  --force        Required for restore
-  --init-config  Init new config files
-  --help
-EOF
+    state_set last_run_diskusage "$diskusage"
 }
 
 ########################################
@@ -488,42 +276,32 @@ EOF
 START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
 
-if $INIT_CONFIG; then
-  init_config
-  exit 0
-fi
-
-$DEBUG && set -x
-
 log "Script started (mode=${MODE}, service=${SERVICE})"
 
-parse_cli "$@"
 load_config_chain
-apply_overrides
-prepare
 
-if $USE_USB; then
-  [[ -b "$USB_ID" ]] || fatal "USB device not found"
-  DESTDIR="$USB_MOUNT/$SERVICE"
-fi
+# Load configuration files (order matters)
+# Example:
+#   default.conf → host.conf → machine.conf
+load_config \
+    "./default.conf" \
+    "./${THIS_HOST:-}.conf" \
+    "./machine.conf"
+
+apply_overrides
+
+prepare
 
 case "$MODE" in
     backup)
         take_snapshot
         backup_blockchain
-        verify_backup
+        ;;
+    restore)
+        restore_blockchain
         ;;
     merge)
         merge_dirs
-        verify_backup
-        ;;
-    verify)
-        verify_backup
-        ;;
-    restore)
-        $FORCE || fatal "Restore requires --force"
-        restore_blockchain
-        verify_backup
         ;;
     *)
         fatal "Unknown MODE: $MODE"
@@ -533,19 +311,7 @@ esac
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 
-# telemetry
 collect_metrics "$RUNTIME"
-EXIT_CODE=0
-case "$MODE" in
-  backup)  take_snapshot && backup_blockchain || EXIT_CODE=$? ;;
-  merge)   merge_dirs || EXIT_CODE=$? ;;
-  verify)  verify_backup || EXIT_CODE=$? ;;
-esac
-END_TS=$(date +%s)
-RUNTIME=$((END_TS - START_TS))
-collect_metrics "$RUNTIME" "$EXIT_CODE"
-exit "$EXIT_CODE"
 
 log "Script finished successfully"
 exit 0
-
