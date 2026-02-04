@@ -1,0 +1,24 @@
+## v1.0.4 – Verification & Telemetry Release
+
+### Added
+- verify mode with size comparison and rsync dry-run validation
+- optional telemetry backend (MySQL / InfluxDB)
+- structured run lifecycle (open / events / close)
+- config initialization via --init-config
+- hierarchical config precedence model
+- safer restore workflow (CLI-only FORCE, interactive confirmation)
+
+### Changed
+- internal execution flow cleanup
+- stricter error handling and exit code propagation
+- improved logging and state tracking
+
+### Security
+- host-specific configs excluded from git
+- no credentials in repository
+- restore cannot run headless
+
+### Notes
+- Designed for ZFS-backed datasets
+- rsync checksum verification intentionally omitted for performance reasons
+

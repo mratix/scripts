@@ -91,6 +91,48 @@ tank/blockchain/
     replica/
 
 
+🔹 Verification
+
+verify-Mode
+
+Size check
+
+rsync dry-run compare
+
+Exit-Codes & Partial States
+
+🔹 Telemetry
+
+Optional
+
+MySQL / Influx
+
+Run lifecycle
+
+Events (warn/error/fatal)
+
+Security note (credentials via host.conf)
+
+🔹 Config hierarchy
+
+config.conf
+
+default.conf
+
+machine.conf
+
+host.conf
+
+Override-Regeln
+
+🔹 Safety model
+
+FORCE nur CLI
+
+RESTORE interaktiv
+
+No silent destructive actions
+
 SAFETY NOTES
 
 - Restore operations require FORCE=true
@@ -106,7 +148,7 @@ DOCUMENTATION MAP
 README.short
   Quick orientation
 
-RELEASE_NOTES_v1.0.0.txt
+RELEASE_NOTES_v1.0.4.txt
   Exact release state
 
 default.conf, machine.conf, hpms1.conf

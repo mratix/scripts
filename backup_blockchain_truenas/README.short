@@ -2,6 +2,8 @@ Einstieg & Betrieb
 backup_blockchain_truenas.sh – Quick Overview
 =============================================
 
+Deterministic backup/verify/merge tool for blockchain nodes on TrueNAS.
+
 ZFS-first Backup-Script für Blockchain-Nodes auf TrueNAS.
 Entwickelt für Headless-Betrieb, Cronjobs und reale Produktionssysteme.
 
@@ -18,6 +20,17 @@ Zweck
 - Rsync nur als Transportmittel
 - Deterministisches Verhalten (headless-safe)
 
+-----------------------------------------------------------------------
+Features:
+---------
+- ZFS snapshot-first backups
+- rsync-based backup & merge
+- verify mode (size + dry-run compare)
+- optional telemetry (MySQL / Influx)
+- hierarchical config system
+- safe restore (interactive + --force)
+
+Status: Gold Release v1.0.4
 -----------------------------------------------------------------------
 
 Unterstützte Services

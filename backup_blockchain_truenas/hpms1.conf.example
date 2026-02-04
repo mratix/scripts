@@ -26,10 +26,9 @@ LOGFILE="$HOME/backup_blockchain_truenas.log"
 
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="mysql"    # influx|mysql
-MYSQL_HOST="192.168.178.66"
+MYSQL_HOST=""
 MYSQL_PORT="3306"
 MYSQL_DB="telemetry"
 MYSQL_USER="collector"
-MYSQL_PASS="collector"
-MYSQL_TABLE="blockchain_backup_runs"    # blockchain_backup_runs
-
+MYSQL_PASS=""
+MYSQL_TABLE="blockchain_backup_runs"

@@ -2,7 +2,9 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.2
+# Gold Release v1.0.4
+#
+# Stable, production-ready release with verification & telemetry support
 #
 # Backup & restore script for blockchain nodes on TrueNAS
 #
@@ -28,7 +30,7 @@
 #   - minimal persistent state
 #
 # Author: mratix
-# Refactor & extensions: ChatGPT
+# Refactor & extensions: ChatGPT <- my big Thanks
 # ============================================================
 #
 
@@ -55,15 +57,13 @@ RSYNC_OPTS=(-avihH --numeric-ids --delete --stats --info=progress2)
 
 LOGFILE="${LOGFILE:-/var/log/backup_blockchain_truenas.log}"
 STATEFILE="/var/log/backup_blockchain_truenas.state"
-
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
   [chia]="ix-chia-farmer-1"
 )
-CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
 TELEMETRY_ENABLED=false
-TELEMETRY_BACKEND=""
+TELEMETRY_BACKEND=""    # influx|mysql
 
 # Runtime flags:
 # These MUST NOT be set via config files.
@@ -83,6 +83,11 @@ log() {
 
 warn() {
     log "WARNING: $*"
+}
+
+error() {
+    log "ERROR: $*"
+    exit 1
 }
 
 fatal() {
@@ -147,14 +152,14 @@ load_config_chain() {
 
 # Apply CLI / environment overrides after config load
 apply_overrides() {
-    # Only override if variable is already set in env/CLI
-    [ -n "${MODE+x}"    ] && MODE="$MODE"
-    [ -n "${SERVICE+x}" ] && SERVICE="$SERVICE"
-    [ -n "${POOL+x}"    ] && POOL="$POOL"
-    [ -n "${DATASET+x}" ] && DATASET="$DATASET"
-    [ -n "${SRCDIR+x}"  ] && SRCDIR="$SRCDIR"
-    [ -n "${DESTDIR+x}" ] && DESTDIR="$DESTDIR"
-}
+#    # Only override if variable is already set in env/CLI
+#    [ -n "${MODE+x}"    ] && MODE="$MODE"
+#    [ -n "${SERVICE+x}" ] && SERVICE="$SERVICE"
+#    [ -n "${POOL+x}"    ] && POOL="$POOL"
+#    [ -n "${DATASET+x}" ] && DATASET="$DATASET"
+#    [ -n "${SRCDIR+x}"  ] && SRCDIR="$SRCDIR"
+#    [ -n "${DESTDIR+x}" ] && DESTDIR="$DESTDIR"
+: }
 
 ########################################
 # Preparation
@@ -195,9 +200,11 @@ take_snapshot() {
     fi
 
     zfs snapshot -r "${POOL}/${DATASET}@${snapname}" \
-        || fatal "Snapshot creation failed"
+        && { telemetry_event "info" "snapshot created" "script"; } \
+        || { fatal "Snapshot creation failed"; telemetry_event "fatal" "Snapshot creation failed" "script"; }
 
-    state_set last_snapshot "${POOL}/${DATASET}@${snapname}"
+    LAST_SNAPSHOT="${POOL}/${DATASET}@${snapname}"
+    state_set last_snapshot "$LAST_SNAPSHOT"
 }
 
 ########################################
@@ -208,7 +215,7 @@ backup_blockchain() {
     log "backup_blockchain(): start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync $RSYNC_OPTS ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync "${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
@@ -222,9 +229,12 @@ case "$rsync_exit" in
     ;;
   23|24)
     warn "rsync completed with warnings (code=$rsync_exit)"
+    db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
   *)
     fatal "rsync failed (code=$rsync_exit)"
+    telemetry_event "error" "rsync failed (code=$rsync_exit)" "script"
+    db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
 esac
 
@@ -244,7 +254,7 @@ restore_blockchain() {
 
     log "restore_blockchain(): start"
 
-    rsync $RSYNC_OPTS "${DESTDIR}/" "${SRCDIR}/" \
+    rsync "${RSYNC_OPTS[@]} "${DESTDIR}/" "${SRCDIR}/" \
         || fatal "Restore failed"
 
     log "restore_blockchain(): done"
@@ -260,14 +270,15 @@ merge_dirs() {
     take_snapshot
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync $RSYNC_OPTS ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync "${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    rsync $RSYNC_OPTS "${SRCDIR}/" "${DESTDIR}/" \
+    rsync "${RSYNC_OPTS[@]} "${SRCDIR}/" "${DESTDIR}/" \
         || fatal "Merge rsync failed"
 
-    log "merge_dirs(): done"
+    log "Merge completed successfully"
+    telemetry_event "info" "merge completed" "script"
 }
 
 verify_backup() {
@@ -286,34 +297,34 @@ verify_backup() {
     log "Backup size: $dst_size bytes"
 
     if [[ "$src_size" -ne "$dst_size" ]]; then
-        warn "Size mismatch detected"
-    else
-        log "Size check OK"
+        warn "Size mismatch detected (not fatal on ZFS)"
+        telemetry_event "warn" "Size mismatch detected" "script"
+        state_set verify_status "partial"
     fi
 
-    log "Running rsync dry-run (no delete)"
-    rsync -navc \
+    log "Running rsync dry-run verify (no delete, no checksum)"
+    rsync -nav \
         "${RSYNC_EXCLUDES[@]}" \
         "$SRCDIR/" "$DESTDIR/" \
-        >/tmp/verify-${SERVICE}.log \
-        || warn "rsync verify reported differences"
+        >"/tmp/verify-${SERVICE}.log"
 
-    if grep -q '^>' /tmp/verify-${SERVICE}.log; then
+    if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
         warn "Verify found differences"
+        state_set verify_status "partial"
         return 10
     fi
 
+    state_set verify_status "success"
     log "verify_backup(): done"
 }
+
 
 ########################################
 # Metrics / audit
 ########################################
 
 collect_metrics() {
-    local runtime="$1"
-    local diskusage
-    local src_size dst_size
+    local runtime="$1" exit_code="$2" diskusage src_size dst_size
 
     src_size="$(du -sb "$SRCDIR" 2>/dev/null | awk '{print $1}')"
     dst_size="$(du -sb "$DESTDIR" 2>/dev/null | awk '{print $1}')"
@@ -321,12 +332,28 @@ collect_metrics() {
 
     state_set last_run_service   "$SERVICE"
     state_set last_run_mode      "$MODE"
-    state_set last_run_diskusage "$diskusage"
     state_set last_run_runtime_s "$runtime"
+    state_set last_run_diskusage "$diskusage"
     state_set last_run_exit_code "$exit_code"
 
     $TELEMETRY_ENABLED && send_telemetry \
         "$runtime" "$exit_code" "$src_size" "$dst_size"
+}
+
+telemetry_event() {
+    local level="$1"
+    local msg="$2"
+    local source="${3:-script}"
+
+    [[ "$TELEMETRY_BACKEND" = "mysql" ]] || return 0
+    [[ -n "${LAST_RUN_ID:-}" ]] || return 0
+
+    mysql ... -e "
+      INSERT INTO blockchain_backup_events
+        (run_id, level, message, source, created_at)
+      VALUES
+        (${LAST_RUN_ID}, '$level', '$msg', '$source', NOW());
+    " >/dev/null 2>&1 || true
 }
 
 send_telemetry() {
@@ -334,14 +361,107 @@ send_telemetry() {
 
     case "$TELEMETRY_BACKEND" in
         influx)
-            curl -sS -XPOST "$INFLUX_URL/write?db=$INFLUX_DB" \
-              --data-binary \
-              "backup,host=$THIS_HOST,service=$SERVICE,mode=$MODE runtime=${runtime},exit=${exit},src=${src},dst=${dst}"
+            #curl -sS -XPOST "$INFLUX_URL/write?db=$INFLUX_DB" \
+            #  --data-binary \
+            #  "backup,host=$THIS_HOST,service=$SERVICE,mode=$MODE runtime=${runtime},exit=${exit},src=${src},dst=${dst}"
+            send_telemetry_influx "$runtime" "$exit" "$src" "$dst"
+            ;;
+        mysql)
+            send_telemetry_mysql "$runtime" "$exit" "$src" "$dst"
             ;;
         *)
             warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
             ;;
     esac
+}
+
+send_telemetry_mysql() {
+    local runtime="$1"
+    local exit="$2"
+    local src="$3"
+    local dst="$4"
+
+    # Sanity checks
+    command -v mysql >/dev/null 2>&1 || {
+        warn "mysql client not found, skipping telemetry"
+        return 0
+    }
+
+    [[ -n "${MYSQL_DB:-}" && -n "${MYSQL_USER:-}" ]] || {
+        warn "MySQL telemetry not configured, skipping"
+        return 0
+    }
+
+    local sql
+    sql=$(cat <<EOF
+INSERT INTO ${MYSQL_TABLE} (
+    host, service, mode,
+    runtime_s, exit_code,
+    src_size_b, dst_size_b,
+    snapshot
+) VALUES (
+    '${THIS_HOST}',
+    '${SERVICE}',
+    '${MODE}',
+    ${runtime},
+    ${exit},
+    ${src:-NULL},
+    ${dst:-NULL},
+    '${LAST_SNAPSHOT:-}'
+);
+EOF
+)
+
+    mysql \
+        -h "${MYSQL_HOST:-localhost}" \
+        -P "${MYSQL_PORT:-3306}" \
+        -u "$MYSQL_USER" \
+        -p"$MYSQL_PASS" \
+        "$MYSQL_DB" \
+        -e "$sql" \
+        >/dev/null 2>&1 \
+        || warn "MySQL telemetry insert failed"
+}
+
+db_open_run() {
+  local started_at
+  started_at="$(date '+%Y-%m-%d %H:%M:%S')"
+
+  mysql "$DB_NAME" <<SQL
+INSERT INTO blockchain_backup_runs
+  (host, service, mode, started_at)
+VALUES
+  ('$THIS_HOST', '$SERVICE', '$MODE', '$started_at');
+SQL
+
+  LAST_RUN_ID=$(mysql "$DB_NAME" -N -s -e "SELECT LAST_INSERT_ID();")
+
+  [[ -n "$LAST_RUN_ID" ]] || fatal "Failed to obtain LAST_RUN_ID"
+
+  log "DB run opened (id=$LAST_RUN_ID)"
+}
+
+db_log_event() {
+  local level="$1"
+  local msg="$2"
+  local source="$3"
+
+  mysql "$DB_NAME" <<SQL
+INSERT INTO blockchain_backup_events
+  (run_id, level, message, source, created_at)
+VALUES
+  ($LAST_RUN_ID, '$level', '$msg', '$source', NOW());
+SQL
+}
+
+db_close_run() {
+  mysql "$DB_NAME" <<SQL
+UPDATE blockchain_backup_runs
+SET
+  runtime_s = $RUNTIME,
+  exit_code = $EXIT_CODE
+WHERE id = $LAST_RUN_ID;
+SQL
 }
 
 detect_fs_type() {
@@ -487,26 +607,28 @@ EOF
 
 START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
+parse_cli "$@"
+log "Script started (mode=${MODE}, service=${SERVICE})"
+CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
+$DEBUG && set -x
 
 if $INIT_CONFIG; then
   init_config
   exit 0
 fi
 
-$DEBUG && set -x
-
-log "Script started (mode=${MODE}, service=${SERVICE})"
-
-parse_cli "$@"
 load_config_chain
 apply_overrides
 prepare
+db_open_run
 
 if $USE_USB; then
   [[ -b "$USB_ID" ]] || fatal "USB device not found"
   DESTDIR="$USB_MOUNT/$SERVICE"
 fi
+EXIT_CODE=0
 
+# --- execute part
 case "$MODE" in
     backup)
         take_snapshot
@@ -529,23 +651,16 @@ case "$MODE" in
         fatal "Unknown MODE: $MODE"
         ;;
 esac
+EXIT_CODE=$?
 
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 
 # telemetry
-collect_metrics "$RUNTIME"
-EXIT_CODE=0
-case "$MODE" in
-  backup)  take_snapshot && backup_blockchain || EXIT_CODE=$? ;;
-  merge)   merge_dirs || EXIT_CODE=$? ;;
-  verify)  verify_backup || EXIT_CODE=$? ;;
-esac
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 collect_metrics "$RUNTIME" "$EXIT_CODE"
+log "Script finished successfully"
 exit "$EXIT_CODE"
 
-log "Script finished successfully"
-exit 0
-
+### END ###

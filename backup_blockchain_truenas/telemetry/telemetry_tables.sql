@@ -1,30 +1,29 @@
 
-CREATE TABLE backup_runs (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    host VARCHAR(64) NOT NULL,
-    service VARCHAR(64) NOT NULL,
-    mode ENUM('backup','restore','merge','compare','dry') NOT NULL,
+CREATE TABLE blockchain_backup_runs (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ts            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    status ENUM('success','failed','partial') NOT NULL,
-    runtime_seconds INT UNSIGNED NOT NULL,
+    host          VARCHAR(64)  NOT NULL,
+    service       VARCHAR(32)  NOT NULL,
+    mode          VARCHAR(16)  NOT NULL,
 
-    diskusage_bytes BIGINT UNSIGNED NOT NULL,
-    throughput_mb_s DECIMAL(8,2) NOT NULL,
+    runtime_s     INT UNSIGNED,
+    exit_code     INT,
 
-    snapshot_name VARCHAR(128),
-    started_at DATETIME NOT NULL,
-    finished_at DATETIME NOT NULL,
+    src_size_b    BIGINT UNSIGNED,
+    dst_size_b    BIGINT UNSIGNED,
 
-    PRIMARY KEY (id),
-    KEY idx_host_service_time (host, service, started_at),
-    KEY idx_status_time (status, started_at)
-) ENGINE=InnoDB;
+    snapshot      VARCHAR(128),
 
-CREATE TABLE backup_events (
+    INDEX idx_ts (ts),
+    INDEX idx_host_service (host, service)
+);
+
+CREATE TABLE blockchain_backup_events (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     run_id BIGINT UNSIGNED NOT NULL,
 
-    level ENUM('info','warn','error') NOT NULL,
+    level ENUM('log','warn','error','fatal') NOT NULL,
     message TEXT NOT NULL,
     source ENUM('script','state','applog') NOT NULL,
 
@@ -33,9 +32,11 @@ CREATE TABLE backup_events (
     PRIMARY KEY (id),
     KEY idx_run_level (run_id, level),
     CONSTRAINT fk_run
-      FOREIGN KEY (run_id) REFERENCES backup_runs(id)
+      FOREIGN KEY (run_id)
+      REFERENCES blockchain_backup_runs(id)
       ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
 
 CREATE TABLE node_metrics (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
