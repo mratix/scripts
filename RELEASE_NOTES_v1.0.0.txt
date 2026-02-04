@@ -1,0 +1,91 @@
+backup_blockchain_truenas.sh – Release Notes v1.0.0
+===================================================
+
+Status: GOLD
+Branch: gold
+Datum: 2026-02-04
+
+-----------------------------------------------------------------------
+
+Überblick
+---------
+
+v1.0.0 ist der erste stabile, getestete Release-Stand.
+Der Fokus liegt auf Zuverlässigkeit, Headless-Betrieb und ZFS-Korrektheit.
+
+Kein Feature-Overload.
+Kein Komfort-Zirkus.
+Ein solides Fundament.
+
+-----------------------------------------------------------------------
+
+Highlights
+----------
+
+- ZFS-first Design (Snapshots vor jeder kritischen Operation)
+- Headless-safe (Cronjob-tauglich, keine blockierenden Prompts)
+- Saubere Trennung von Code und Konfiguration
+- Deterministisches Verhalten bei Fehlern (Exit-Codes, Logging)
+- Rsync-Härtung (Excludes für .zfs, sauberes Fehlerhandling)
+
+-----------------------------------------------------------------------
+
+Neu / Stabilisiert
+------------------
+
+- Mehrstufige Konfigurationskette (.conf)
+- Explizite Pfadauflösung mit Logging
+- Snapshot-Erstellung vor Backup
+- Rsync mit sicherem Default-Set
+- Robustes Exit-Code-Handling
+- Erfolgreich getesteter Full-Backup-Lauf (bitcoind, ~90 GiB)
+
+-----------------------------------------------------------------------
+
+Bewusste Einschränkungen
+------------------------
+
+- Restore ist absichtlich unbequem (FORCE + Bestätigung)
+- Verify-Modus ist reserviert, aber noch nicht implementiert
+- Kein automatisches Snapshot-Retention-Management
+- Keine Replikation (bewusst extern zu lösen)
+
+-----------------------------------------------------------------------
+
+Kompatibilität
+--------------
+
+Getestet auf:
+- TrueNAS (ZFS)
+- bitcoind Dataset-Layout (blocks / chainstate / indexes)
+
+-----------------------------------------------------------------------
+
+Migration / Upgrade
+-------------------
+
+- Alpha-Stand wurde eingefroren
+- Gold v1.0.0 ist ein klarer Schnitt
+- Weitere Entwicklung erfolgt inkrementell auf dieser Basis
+
+-----------------------------------------------------------------------
+
+Ausblick (nicht Teil von v1.0.0)
+--------------------------------
+
+- Verify-Modus
+- Chia-Integration (Farmer / Plots)
+- Telemetrie (Influx / SQL, optional)
+- Modularisierung (optional, später)
+
+-----------------------------------------------------------------------
+
+Haftung
+-------
+
+Du bist Root.
+Du weißt, was du tust.
+Wenn nicht: nicht benutzen.
+
+Ende.
+
