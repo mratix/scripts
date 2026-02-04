@@ -44,6 +44,8 @@ MODE="backup"                   # backup | merge | verify | restore
 SERVICE=""                      # bitcoind|monerod|chia
 POOL="${POOL:-}"
 DATASET="${DATASET:-}"
+SRC_BASE=""
+DEST_BASE=""
 SRCDIR="${SRCDIR:-$SRC_BASE/$SERVICE}"
 DESTDIR="${DESTDIR:-$DEST_BASE/$SERVICE}"
 FS_TYPE="${FS_TYPE:-unknown}"
@@ -150,23 +152,13 @@ load_config_chain() {
     done
 }
 
-# Apply CLI / environment overrides after config load
-apply_overrides() {
-#    # Only override if variable is already set in env/CLI
-#    [ -n "${MODE+x}"    ] && MODE="$MODE"
-#    [ -n "${SERVICE+x}" ] && SERVICE="$SERVICE"
-#    [ -n "${POOL+x}"    ] && POOL="$POOL"
-#    [ -n "${DATASET+x}" ] && DATASET="$DATASET"
-#    [ -n "${SRCDIR+x}"  ] && SRCDIR="$SRCDIR"
-#    [ -n "${DESTDIR+x}" ] && DESTDIR="$DESTDIR"
-: }
 
 ########################################
 # Preparation
 ########################################
 
 prepare() {
-    log "prepare(): start"
+    log "prepare__ start"
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
     log "  DESTDIR=${DESTDIR}"
@@ -182,7 +174,7 @@ prepare() {
 
     mkdir -p "$DESTDIR" || fatal "Failed to create destination: $DESTDIR"
 
-    log "prepare(): done"
+    log "prepare__ done"
 }
 
 ########################################
@@ -190,9 +182,9 @@ prepare() {
 ########################################
 
 take_snapshot() {
-    local snapname="backup-$(date +%Y-%m-%d_%H-%M-%S)"
+    local snapname=backup-$(date +%Y-%m-%d_%H-%M-%S)
 
-    log "take_snapshot(): ${POOL}/${DATASET}@${snapname}"
+    log "take_snapshot__ ${POOL}/${DATASET}@${snapname}"
 
     if [ "$DRY_RUN" = true ]; then
         log "DRY-RUN: zfs snapshot -r ${POOL}/${DATASET}@${snapname}"
@@ -212,15 +204,15 @@ take_snapshot() {
 ########################################
 
 backup_blockchain() {
-    log "backup_blockchain(): start"
+    log "backup_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync "${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync ${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    log "Starting rsync from '${SRCDIR}/' to '${DESTDIR}/'"
-    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "${SRCDIR}/" "${DESTDIR}/"
+    log "Starting rsync from ${SRCDIR}/ to ${DESTDIR}/"
+    rsync ${RSYNC_OPTS[@]} ${RSYNC_EXCLUDES[@]} ${SRCDIR}/ ${DESTDIR}/
 rsync_exit=$?
 
 case "$rsync_exit" in
@@ -228,17 +220,17 @@ case "$rsync_exit" in
     log "rsync completed successfully"
     ;;
   23|24)
-    warn "rsync completed with warnings (code=$rsync_exit)"
+    warn "rsync completed with warnings code=$rsync_exit"
     db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
   *)
-    fatal "rsync failed (code=$rsync_exit)"
-    telemetry_event "error" "rsync failed (code=$rsync_exit)" "script"
+    fatal "rsync failed code=$rsync_exit"
+    telemetry_event "error" "rsync failed code=$rsync_exit" "script"
     db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
 esac
 
-    log "backup_blockchain(): done"
+    log "backup_blockchain__ done"
 }
 
 ########################################
@@ -252,12 +244,12 @@ restore_blockchain() {
     read -r -p "Type YES to continue: " confirm
     [ "$confirm" = "YES" ] || fatal "Restore aborted by user"
 
-    log "restore_blockchain(): start"
+    log "restore_blockchain__ start"
 
-    rsync "${RSYNC_OPTS[@]} "${DESTDIR}/" "${SRCDIR}/" \
+    rsync ${RSYNC_OPTS[@]} ${DESTDIR}/ ${SRCDIR}/ \
         || fatal "Restore failed"
 
-    log "restore_blockchain(): done"
+    log "restore_blockchain__ done"
 }
 
 ########################################
@@ -265,16 +257,16 @@ restore_blockchain() {
 ########################################
 
 merge_dirs() {
-    log "merge_dirs(): start"
+    log "merge_dirs__ start"
 
     take_snapshot
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync "${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync ${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    rsync "${RSYNC_OPTS[@]} "${SRCDIR}/" "${DESTDIR}/" \
+    rsync ${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/ \
         || fatal "Merge rsync failed"
 
     log "Merge completed successfully"
@@ -282,7 +274,7 @@ merge_dirs() {
 }
 
 verify_backup() {
-    log "verify_backup(): start"
+    log "verify_backup__ start"
 
     [ -d "$SRCDIR" ]  || fatal "Source directory missing: $SRCDIR"
     [ -d "$DESTDIR" ] || fatal "Backup directory missing: $DESTDIR"
@@ -290,8 +282,8 @@ verify_backup() {
     log "Verifying structure and size"
 
     local src_size dst_size
-    src_size="$(du -sb "$SRCDIR"  | awk '{print $1}')"
-    dst_size="$(du -sb "$DESTDIR" | awk '{print $1}')"
+    src_size="$(du -sb $SRCDIR  | awk '{print $1}')"
+    dst_size="$(du -sb $DESTDIR | awk '{print $1}')"
 
     log "Source size: $src_size bytes"
     log "Backup size: $dst_size bytes"
@@ -304,8 +296,8 @@ verify_backup() {
 
     log "Running rsync dry-run verify (no delete, no checksum)"
     rsync -nav \
-        "${RSYNC_EXCLUDES[@]}" \
-        "$SRCDIR/" "$DESTDIR/" \
+        ${RSYNC_EXCLUDES[@]} \
+        $SRCDIR/" "$DESTDIR/ \
         >"/tmp/verify-${SERVICE}.log"
 
     if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
@@ -315,7 +307,7 @@ verify_backup() {
     fi
 
     state_set verify_status "success"
-    log "verify_backup(): done"
+    log "verify_backup__ done"
 }
 
 
@@ -618,7 +610,6 @@ if $INIT_CONFIG; then
 fi
 
 load_config_chain
-apply_overrides
 prepare
 db_open_run
 
@@ -663,4 +654,3 @@ collect_metrics "$RUNTIME" "$EXIT_CODE"
 log "Script finished successfully"
 exit "$EXIT_CODE"
 
-### END ###
