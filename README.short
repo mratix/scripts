@@ -1,0 +1,114 @@
+Einstieg & Betrieb
+backup_blockchain_truenas.sh – Quick Overview
+=============================================
+
+ZFS-first Backup-Script für Blockchain-Nodes auf TrueNAS.
+Entwickelt für Headless-Betrieb, Cronjobs und reale Produktionssysteme.
+
+Dieses Script ist ein Admin-Werkzeug.
+Kein Wizard. Keine GUI. Keine Magie.
+
+-----------------------------------------------------------------------
+
+Zweck
+-----
+
+- Sichere Backups von Blockchain-Daten
+- ZFS Snapshots als primäre Schutzschicht
+- Rsync nur als Transportmittel
+- Deterministisches Verhalten (headless-safe)
+
+-----------------------------------------------------------------------
+
+Unterstützte Services
+---------------------
+
+- bitcoind
+- monerod
+- chia (Farmer / Full Node / Plots – vorbereitet)
+
+Weitere Services können ergänzt werden.
+
+-----------------------------------------------------------------------
+
+Betriebsmodi (MODE)
+-------------------
+
+MODE=backup    Snapshot + Backup (Standard)
+MODE=restore   Restore aus Backup (nur mit FORCE)
+MODE=merge     Zusammenführen von Datasets (Snapshot-geschützt)
+MODE=verify    reserviert
+
+-----------------------------------------------------------------------
+
+Konfiguration
+-------------
+
+Konfiguration erfolgt über externe .conf-Dateien.
+Diese werden in folgender Reihenfolge geladen (falls vorhanden):
+
+1. config.conf        (optional, lokal)
+2. default.conf       (global)
+3. machine.conf       (rollenbasiert)
+4. <hostname>.conf    (maschinen-spezifisch)
+
+Jede .conf kann mit `enabled=true|false` aktiviert oder deaktiviert werden.
+
+CLI-Variablen überschreiben Konfigurationswerte.
+
+-----------------------------------------------------------------------
+
+Pfad-Logik (vereinfachte Sicht)
+-------------------------------
+
+SRC_BASE   Basis der Quelldaten (z. B. /mnt/ssd/blockchain)
+DEST_BASE  Basis der Backups   (z. B. /mnt/tank/backups/blockchain)
+
+SRCDIR / DESTDIR können explizit gesetzt werden (Overrides, z. B. für Tests).
+
+-----------------------------------------------------------------------
+
+ZFS-Verhalten
+-------------
+
+- Vor backup / merge / restore wird ein Snapshot erstellt
+- Snapshot-Management (Retention, Replikation) erfolgt extern
+- .zfs Verzeichnisse werden von rsync ausgeschlossen
+
+Grundsatz:
+Snapshots sind die Wahrheit. Rsync ist nur ein Werkzeug.
+
+-----------------------------------------------------------------------
+
+Logging
+-------
+
+Standard-Logfile:
+/var/log/blockchain_backup.log
+
+Logging ist immer aktiv und darf nicht entfernt werden.
+
+-----------------------------------------------------------------------
+
+Minimaler Testlauf
+------------------
+
+SERVICE=bitcoind MODE=backup ./backup_blockchain_truenas.sh
+
+Für Restore zusätzlich erforderlich:
+FORCE=true + interaktive Bestätigung
+
+-----------------------------------------------------------------------
+
+Zielgruppe
+----------
+
+- Self-hosted Node-Betreiber
+- Homelabs mit ZFS
+- Admins, die Backups verstehen wollen
+
+Nicht geeignet für Klickibunti-Setups.
+
+Weitere Details, Design-Entscheidungen und Philosophie:
+siehe README.md
+
