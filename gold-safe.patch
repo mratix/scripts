@@ -1,0 +1,26 @@
+diff -u backup_blockchain_truenas.sh backup_blockchain_truenas.sh
+--- backup_blockchain_truenas.sh
++++ backup_blockchain_truenas.sh
+@@ -1,4 +1,12 @@
+ #!/bin/bash
+ 
++#
++# Gold Release v1.0.0
++# Backup & restore script for blockchain nodes on TrueNAS
++# Supports: bitcoind, monerod, chia
++#
++
++set -Eeuo pipefail
++
+@@
+ log "Script finished successfully"
++
++# --- Gold metrics ---
++END_TS=$(date +%s)
++RUNTIME=$((END_TS - START_TS))
++DISKUSAGE="$(du -shL "$SRCDIR" 2>/dev/null | awk '{print $1}')"
++
++echo "last_run_runtime_sec=${RUNTIME}" >> /var/log/backup_blockchain_truenas.state
++echo "last_run_diskusage=${DISKUSAGE}" >> /var/log/backup_blockchain_truenas.state
++
+ exit 0

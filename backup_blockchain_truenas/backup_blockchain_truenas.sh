@@ -40,7 +40,13 @@ FORCE="${FORCE:-false}"
 DEBUG="${DEBUG:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 
-RSYNC_OPTS="${RSYNC_OPTS:--avihH --numeric-ids --delete --stats --info=progress2}"
+RSYNC_EXCLUDES=(
+  --exclude='.zfs'
+  --exclude='.zfs/'
+  --exclude='.zfs/*'
+  --exclude='.snapshot/'
+)
+RSYNC_OPTS="${RSYNC_OPTS:--avihH --numeric-ids ${RSYNC_EXCLUDES} --delete --stats --info=progress2}"
 
 LOGFILE="${SCLOGFILE:-/var/log/backup_blockchain_truenas.log}"
 STATEFILE="/var/log/backup_blockchain_truenas.state"
@@ -78,11 +84,68 @@ state_set() {
 }
 
 ########################################
+# Config handling
+########################################
+
+# Usage:
+#   load_config default.conf hpms1.conf machine.conf
+#
+# Rules:
+# - Later files override earlier ones
+# - CLI / environment variables override config
+# - Missing files are ignored with warning
+
+load_config() {
+    local cfg
+
+    for cfg in "$@"; do
+        if [ -f "$cfg" ]; then
+            log "Loading config: $cfg"
+            # shellcheck source=/dev/null
+            source "$cfg"
+        else
+            warn "Config file not found, skipping: $cfg"
+        fi
+    done
+}
+
+load_config_chain() {
+    local cfg
+
+    for cfg in "./config.conf" "./default.conf" "./machine.conf" "./${THIS_HOST}.conf"; do
+        if [[ -f "$cfg" ]]; then
+            load_config "$cfg"
+        else
+            log "WARNING: Config file not found, skipping: $cfg"
+        fi
+    done
+}
+
+# Apply CLI / environment overrides after config load
+apply_overrides() {
+    # Only override if variable is already set in env/CLI
+    [ -n "${MODE+x}"    ] && MODE="$MODE"
+    [ -n "${SERVICE+x}" ] && SERVICE="$SERVICE"
+    [ -n "${POOL+x}"    ] && POOL="$POOL"
+    [ -n "${DATASET+x}" ] && DATASET="$DATASET"
+    [ -n "${SRCDIR+x}"  ] && SRCDIR="$SRCDIR"
+    [ -n "${DESTDIR+x}" ] && DESTDIR="$DESTDIR"
+
+    [ -n "${FORCE+x}"   ] && FORCE="$FORCE"
+    [ -n "${DEBUG+x}"   ] && DEBUG="$DEBUG"
+    [ -n "${DRY_RUN+x}" ] && DRY_RUN="$DRY_RUN"
+}
+
+########################################
 # Preparation
 ########################################
 
 prepare() {
     log "prepare(): start"
+    log "Resolved paths:"
+    log "  SRCDIR=${SRCDIR}"
+    log "  DESTDIR=${DESTDIR}"
+    log "  POOL=${POOL} DATASET=${DATASET}"
 
     [ -n "$SERVICE" ] || fatal "SERVICE not set"
     [ -n "$POOL" ]    || fatal "POOL not set"
@@ -129,8 +192,24 @@ backup_blockchain() {
         return 0
     fi
 
+    log "Starting rsync from '${SRCDIR}/' to '${DESTDIR}/'"
     rsync $RSYNC_OPTS "${SRCDIR}/" "${DESTDIR}/" \
         || fatal "rsync backup failed"
+
+rsync_exit=$?
+
+case "$rsync_exit" in
+  0)
+    log "rsync completed successfully"
+    ;;
+  23|24)
+    warn "rsync completed with warnings (code=$rsync_exit) – acceptable"
+    ;;
+  *)
+    err "rsync failed (code=$rsync_exit)"
+    return 1
+    ;;
+esac
 
     log "backup_blockchain(): done"
 }
@@ -195,8 +274,21 @@ collect_metrics() {
 ########################################
 
 START_TS=$(date +%s)
+THIS_HOST=${THIS_HOST:-$(hostname -s)}
 
 log "Script started (mode=${MODE}, service=${SERVICE})"
+
+load_config_chain
+
+# Load configuration files (order matters)
+# Example:
+#   default.conf → host.conf → machine.conf
+load_config \
+    "./default.conf" \
+    "./${THIS_HOST:-}.conf" \
+    "./machine.conf"
+
+apply_overrides
 
 prepare
 
