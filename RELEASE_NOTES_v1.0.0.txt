@@ -1,91 +1,95 @@
-backup_blockchain_truenas.sh – Release Notes v1.0.0
-===================================================
+backup_blockchain_truenas.sh
+Release Notes v1.0.0 (Gold)
 
-Status: GOLD
-Branch: gold
-Datum: 2026-02-04
+Release Date: 2026-02-04
+Status: Stable / Production-ready
 
------------------------------------------------------------------------
 
-Überblick
----------
+SUMMARY
 
-v1.0.0 ist der erste stabile, getestete Release-Stand.
-Der Fokus liegt auf Zuverlässigkeit, Headless-Betrieb und ZFS-Korrektheit.
+This is the first stable release of backup_blockchain_truenas.sh.
 
-Kein Feature-Overload.
-Kein Komfort-Zirkus.
-Ein solides Fundament.
+The script provides ZFS-first backup, restore and merge operations
+for blockchain nodes running on TrueNAS.
 
------------------------------------------------------------------------
+This release focuses on correctness, safety, and headless operation.
+No experimental features are included.
 
-Highlights
-----------
 
-- ZFS-first Design (Snapshots vor jeder kritischen Operation)
-- Headless-safe (Cronjob-tauglich, keine blockierenden Prompts)
-- Saubere Trennung von Code und Konfiguration
-- Deterministisches Verhalten bei Fehlern (Exit-Codes, Logging)
-- Rsync-Härtung (Excludes für .zfs, sauberes Fehlerhandling)
+WHAT IS INCLUDED
 
------------------------------------------------------------------------
+- ZFS snapshot creation before backup operations
+- Rsync-based file transport with explicit ZFS excludes (.zfs)
+- Headless-safe execution suitable for cron
+- Externalized configuration via layered .conf files
+- Deterministic behavior with explicit error handling
+- Mandatory logging with clear failure modes
+- Safe-by-design restore workflow (FORCE + confirmation)
+- Minimal but reliable operational state tracking
 
-Neu / Stabilisiert
-------------------
 
-- Mehrstufige Konfigurationskette (.conf)
-- Explizite Pfadauflösung mit Logging
-- Snapshot-Erstellung vor Backup
-- Rsync mit sicherem Default-Set
-- Robustes Exit-Code-Handling
-- Erfolgreich getesteter Full-Backup-Lauf (bitcoind, ~90 GiB)
+SUPPORTED SERVICES
 
------------------------------------------------------------------------
+- bitcoind
+- monerod
+- chia (node, farmer, plots)
 
-Bewusste Einschränkungen
-------------------------
+Service handling is generic and extensible.
 
-- Restore ist absichtlich unbequem (FORCE + Bestätigung)
-- Verify-Modus ist reserviert, aber noch nicht implementiert
-- Kein automatisches Snapshot-Retention-Management
-- Keine Replikation (bewusst extern zu lösen)
 
------------------------------------------------------------------------
+CONFIGURATION MODEL
 
-Kompatibilität
---------------
+Layered configuration loading:
 
-Getestet auf:
-- TrueNAS (ZFS)
-- bitcoind Dataset-Layout (blocks / chainstate / indexes)
+1. config.conf (optional, disabled by default)
+2. default.conf
+3. machine.conf
+4. host-specific config (e.g. hpms1.conf)
+5. CLI overrides
 
------------------------------------------------------------------------
+Later layers override earlier ones.
+Each config file may be enabled or disabled explicitly.
 
-Migration / Upgrade
--------------------
 
-- Alpha-Stand wurde eingefroren
-- Gold v1.0.0 ist ein klarer Schnitt
-- Weitere Entwicklung erfolgt inkrementell auf dieser Basis
+SAFETY AND DESIGN DECISIONS
 
------------------------------------------------------------------------
+- Snapshots are treated as the primary source of truth
+- Rsync is used strictly as a transport mechanism
+- .zfs paths are excluded explicitly to prevent corruption
+- Restore operations are intentionally inconvenient
+- Logging is mandatory and must not be removed
+- The script assumes operator competence (admin tool)
 
-Ausblick (nicht Teil von v1.0.0)
---------------------------------
 
-- Verify-Modus
-- Chia-Integration (Farmer / Plots)
-- Telemetrie (Influx / SQL, optional)
-- Modularisierung (optional, später)
+KNOWN LIMITATIONS
 
------------------------------------------------------------------------
+- verify mode is reserved but not yet implemented
+- No automated snapshot retention (external responsibility)
+- No GUI or interactive setup wizard
+- Requires root privileges
 
-Haftung
--------
 
-Du bist Root.
-Du weißt, was du tust.
-Wenn nicht: nicht benutzen.
+MIGRATION NOTES
 
-Ende.
+This release replaces all previous alpha versions.
+
+Older scripts should be archived and not mixed with v1.0.0.
+
+Configuration files from alpha versions may require review.
+
+
+CREDITS
+
+Concept, requirements and real-world validation:
+Mr. AtiX
+
+Implementation and iterative hardening:
+AI-assisted development
+
+
+LICENSE
+
+Open source.
+No warranty.
+Use at your own risk.
 
