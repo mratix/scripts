@@ -2,8 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.4
-#
+# Gold Release v1.0.5
 # Stable, production-ready release with verification & telemetry support
 #
 # Backup & restore script for blockchain nodes on TrueNAS
@@ -16,6 +15,7 @@
 # Supported long flags:
 #   --mode:     backup|merge|verify|restore
 #   --service:  bitcoind|monerod|chia
+#   --verbose
 #   --debug
 #   --dry-run
 #   --force
@@ -26,11 +26,11 @@
 #   - deterministic
 #   - headless-safe (except restore)
 #   - ZFS-first (snapshots, replication)
-#   - rsync as fallback / merge tool
+#   - rsync as fallback (merge,verify tool)
 #   - minimal persistent state
 #
 # Author: mratix
-# Refactor & extensions: ChatGPT <- my big Thanks
+# Refactor & extensions: ChatGPT <- With best thanks to
 # ============================================================
 #
 
@@ -71,6 +71,7 @@ TELEMETRY_BACKEND=""    # influx|mysql
 # These MUST NOT be set via config files.
 # CLI / environment only.
 FORCE=false
+VERBOSE=false
 DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
@@ -82,20 +83,20 @@ INIT_CONFIG=false
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"
 }
-
+info() {
+    log "Info: $*"
+}
+vlog() {
+    log "Verbose: $*"
+}
 warn() {
     log "WARNING: $*"
 }
-
 error() {
     log "ERROR: $*"
     exit 1
 }
 
-fatal() {
-    log "ERROR: $*"
-    exit 1
-}
 
 ########################################
 # Statefile helpers (minimal audit trail)
@@ -158,23 +159,22 @@ load_config_chain() {
 ########################################
 
 prepare() {
-    log "prepare__ start"
+    vlog "prepare__ start"
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
     log "  DESTDIR=${DESTDIR}"
     log "  POOL=${POOL} DATASET=${DATASET}"
 
-    [ -n "$SERVICE" ] || fatal "SERVICE not set"
-    [ -n "$POOL" ]    || fatal "POOL not set"
-    [ -n "$DATASET" ] || fatal "DATASET not set"
-    [ -n "$SRCDIR" ]  || fatal "SRCDIR not set"
-    [ -n "$DESTDIR" ] || fatal "DESTDIR not set"
+    [ -n "$SERVICE" ] || error "SERVICE not set"
+    [ -n "$POOL" ]    || error "POOL not set"
+    [ -n "$DATASET" ] || error "DATASET not set"
+    [ -n "$SRCDIR" ]  || error "SRCDIR not set"
+    [ -n "$DESTDIR" ] || error "DESTDIR not set"
+    [ -d "$SRCDIR" ]  || error "Source directory does not exist: $SRCDIR"
 
-    [ -d "$SRCDIR" ] || fatal "Source directory does not exist: $SRCDIR"
+    mkdir -p "$DESTDIR" || error "Failed to create destination: $DESTDIR"
 
-    mkdir -p "$DESTDIR" || fatal "Failed to create destination: $DESTDIR"
-
-    log "prepare__ done"
+    vlog "prepare__ done"
 }
 
 ########################################
@@ -182,9 +182,10 @@ prepare() {
 ########################################
 
 take_snapshot() {
-    local snapname=backup-$(date +%Y-%m-%d_%H-%M-%S)
+    local snapname
+    snapname="backup-$(date +%Y-%m-%d_%H-%M-%S)"
 
-    log "take_snapshot__ ${POOL}/${DATASET}@${snapname}"
+    log "Snapshot ${POOL}/${DATASET}@${snapname} taken."
 
     if [ "$DRY_RUN" = true ]; then
         log "DRY-RUN: zfs snapshot -r ${POOL}/${DATASET}@${snapname}"
@@ -193,7 +194,7 @@ take_snapshot() {
 
     zfs snapshot -r "${POOL}/${DATASET}@${snapname}" \
         && { telemetry_event "info" "snapshot created" "script"; } \
-        || { fatal "Snapshot creation failed"; telemetry_event "fatal" "Snapshot creation failed" "script"; }
+        || { error "Snapshot creation failed"; telemetry_event "error" "Snapshot creation failed" "script"; }
 
     LAST_SNAPSHOT="${POOL}/${DATASET}@${snapname}"
     state_set last_snapshot "$LAST_SNAPSHOT"
@@ -204,15 +205,15 @@ take_snapshot() {
 ########################################
 
 backup_blockchain() {
-    log "backup_blockchain__ start"
+    vlog "backup_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync ${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync "${RSYNC_OPTS[@]}" ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
     log "Starting rsync from ${SRCDIR}/ to ${DESTDIR}/"
-    rsync ${RSYNC_OPTS[@]} ${RSYNC_EXCLUDES[@]} ${SRCDIR}/ ${DESTDIR}/
+    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" ${SRCDIR}/ ${DESTDIR}/
 rsync_exit=$?
 
 case "$rsync_exit" in
@@ -224,13 +225,13 @@ case "$rsync_exit" in
     db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
   *)
-    fatal "rsync failed code=$rsync_exit"
+    error "rsync failed code=$rsync_exit"
     telemetry_event "error" "rsync failed code=$rsync_exit" "script"
     db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
 esac
 
-    log "backup_blockchain__ done"
+    vlog "backup_blockchain__ done"
 }
 
 ########################################
@@ -238,18 +239,18 @@ esac
 ########################################
 
 restore_blockchain() {
-    [ "$FORCE" = true ] || fatal "Restore requires FORCE=true"
+    [ "$FORCE" = true ] || error "Restore requires FORCE=true"
 
     warn "RESTORE MODE – this will overwrite live data"
     read -r -p "Type YES to continue: " confirm
-    [ "$confirm" = "YES" ] || fatal "Restore aborted by user"
+    [ "$confirm" = "YES" ] || error "Restore aborted by user"
 
-    log "restore_blockchain__ start"
+    vlog "restore_blockchain__ start"
 
-    rsync ${RSYNC_OPTS[@]} ${DESTDIR}/ ${SRCDIR}/ \
-        || fatal "Restore failed"
+    rsync "${RSYNC_OPTS[@]}" ${DESTDIR}/ ${SRCDIR}/ \
+        || error "Restore failed"
 
-    log "restore_blockchain__ done"
+    vlog "restore_blockchain__ done"
 }
 
 ########################################
@@ -257,27 +258,27 @@ restore_blockchain() {
 ########################################
 
 merge_dirs() {
-    log "merge_dirs__ start"
+    vlog "merge_dirs__ start"
 
     take_snapshot
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync ${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync "${RSYNC_OPTS[@]}" ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    rsync ${RSYNC_OPTS[@]} ${SRCDIR}/ ${DESTDIR}/ \
-        || fatal "Merge rsync failed"
+    rsync "${RSYNC_OPTS[@]}" ${SRCDIR}/ ${DESTDIR}/ \
+        || error "Merge rsync failed"
 
     log "Merge completed successfully"
     telemetry_event "info" "merge completed" "script"
 }
 
 verify_backup() {
-    log "verify_backup__ start"
+    vlog "verify_backup__ start"
 
-    [ -d "$SRCDIR" ]  || fatal "Source directory missing: $SRCDIR"
-    [ -d "$DESTDIR" ] || fatal "Backup directory missing: $DESTDIR"
+    [ -d "$SRCDIR" ]  || error "Source directory missing: $SRCDIR"
+    [ -d "$DESTDIR" ] || error "Backup directory missing: $DESTDIR"
 
     log "Verifying structure and size"
 
@@ -296,7 +297,7 @@ verify_backup() {
 
     log "Running rsync dry-run verify (no delete, no checksum)"
     rsync -nav \
-        ${RSYNC_EXCLUDES[@]} \
+        "${RSYNC_EXCLUDES[@]}" \
         $SRCDIR/" "$DESTDIR/ \
         >"/tmp/verify-${SERVICE}.log"
 
@@ -307,7 +308,7 @@ verify_backup() {
     fi
 
     state_set verify_status "success"
-    log "verify_backup__ done"
+    vlog "verify_backup__ done"
 }
 
 
@@ -427,8 +428,7 @@ VALUES
 SQL
 
   LAST_RUN_ID=$(mysql "$DB_NAME" -N -s -e "SELECT LAST_INSERT_ID();")
-
-  [[ -n "$LAST_RUN_ID" ]] || fatal "Failed to obtain LAST_RUN_ID"
+  [[ -n "$LAST_RUN_ID" ]] || error "Failed to obtain LAST_RUN_ID"
 
   log "DB run opened (id=$LAST_RUN_ID)"
 }
@@ -468,10 +468,10 @@ init_config() {
 
   create_cfg "default.conf"   default
   create_cfg "machine.conf"   machine
-  create_cfg "${host}.conf"   host
+  create_cfg "${host}.conf.example"   host
 
   log "Config initialization complete"
-  log "Edit the files and rerun without --init-config"
+  vlog "Edit the files and rerun without --init-config"
 }
 
 create_cfg() {
@@ -488,9 +488,10 @@ create_cfg() {
   case "$type" in
     default)
       cat >"$file" <<'EOF'
-# default.conf
+# --- default.conf ---
 # Lowest priority config
 
+# This settings results in: $0 --mode backup --dry-run
 MODE=backup
 DRY_RUN=true
 
@@ -499,8 +500,11 @@ EOF
       ;;
     machine)
       cat >"$file" <<'EOF'
-# machine.conf
+# --- machine.conf ---
 # Machine-wide settings
+
+MODE=backup
+DRY_RUN=false
 
 POOL="tank"
 DATASET="blockchain"
@@ -515,6 +519,7 @@ EOF
       ;;
     host)
       cat >"$file" <<'EOF'
+# --- ${host}.conf ---
 # Host-specific config
 # Last in precedence chain
 
@@ -524,42 +529,51 @@ EOF
 EOF
       ;;
     *)
-      fatal "Unknown config type: $type"
+      error "Unknown config type: $type"
       ;;
   esac
 }
 
-parse_cli() {
+parse_cli_args() {
   local OPTIONS
   OPTIONS=$(getopt -o '' \
-    --long mode:,service:,debug,dry-run,force,help \
+    --long mode:,service:,verbose,debug,dry-run,force,init-config,help \
     -- "$@") || exit 1
 
-  eval set -- "$OPTIONS"
+  # if getopt returned an error
+  if [ $? -ne 0 ]; then
+    error "Error: Invalid options."
+  fi
+  eval set -- "$OPTIONS" # Set the rearranged arguments
 
+  # Iterate over the options
   while true; do
     case "$1" in
-      --mode)
+      -m|--mode)
         MODE="$2"
         shift 2
         ;;
-      --service)
+      -s|--service)
         SERVICE="$2"
         shift 2
+        ;;
+      --verbose)
+        VERBOSE=true
+        shift
         ;;
       --debug)
         DEBUG=true
         shift
         ;;
-      --dry-run)
+      -t|--dry-run)
         DRY_RUN=true
         shift
         ;;
-      --force)
+      -f|--force)
         FORCE=true
         shift
         ;;
-        --init-config)
+      --init-config)
         INIT_CONFIG=true
         shift
         ;;
@@ -572,10 +586,13 @@ parse_cli() {
         break
         ;;
       *)
-        fatal "Unknown option: $1"
+        error "Unknown option: $1"
         ;;
     esac
   done
+
+# Handle non-option arguments
+log "Non-option arguments: $*"
 }
 
 usage() {
@@ -585,6 +602,7 @@ Usage: $0 [options]
 Options:
   --mode         <backup|merge|verify|restore>
   --service      <bitcoind|monerod|chia>
+  --verbose      Verbose outputs and logging
   --debug        Enable bash xtrace
   --dry-run      Do not modify anything
   --force        Required for restore
@@ -599,8 +617,8 @@ EOF
 
 START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
-parse_cli "$@"
-log "Script started (mode=${MODE}, service=${SERVICE})"
+parse_cli_args "$@"
+log "Script started: mode=${MODE}, service=${SERVICE}" # todo show given args
 CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
 $DEBUG && set -x
 
@@ -614,7 +632,7 @@ prepare
 db_open_run
 
 if $USE_USB; then
-  [[ -b "$USB_ID" ]] || fatal "USB device not found"
+  [[ -b "$USB_ID" ]] || error "USB device not found"
   DESTDIR="$USB_MOUNT/$SERVICE"
 fi
 EXIT_CODE=0
@@ -634,12 +652,12 @@ case "$MODE" in
         verify_backup
         ;;
     restore)
-        $FORCE || fatal "Restore requires --force"
+        $FORCE || error "Restore requires --force"
         restore_blockchain
         verify_backup
         ;;
     *)
-        fatal "Unknown MODE: $MODE"
+        error "Unknown MODE: $MODE"
         ;;
 esac
 EXIT_CODE=$?
