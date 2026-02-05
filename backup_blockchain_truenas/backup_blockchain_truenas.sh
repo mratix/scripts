@@ -2,8 +2,8 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.5
-# Stable, production-ready release with verification & telemetry support
+# Gold Release v1.0.6
+# Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS
 #
@@ -48,7 +48,7 @@ SRC_BASE=""
 DEST_BASE=""
 SRCDIR="${SRCDIR:-$SRC_BASE/$SERVICE}"
 DESTDIR="${DESTDIR:-$DEST_BASE/$SERVICE}"
-FS_TYPE="${FS_TYPE:-unknown}"
+#FS_TYPE="${FS_TYPE:-unknown}" # unbenutzt
 RSYNC_EXCLUDES=(
   --exclude=.zfs
   --exclude=.zfs/*
@@ -58,7 +58,8 @@ RSYNC_EXCLUDES=(
 RSYNC_OPTS=(-avihH --numeric-ids --delete --stats --info=progress2)
 
 LOGFILE="${LOGFILE:-/var/log/backup_blockchain_truenas.log}"
-STATEFILE="/var/log/backup_blockchain_truenas.state"
+STATEFILE="${STATEFILE:-/var/log/backup_blockchain_truenas.state}"
+
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
@@ -71,7 +72,8 @@ TELEMETRY_BACKEND=""    # influx|mysql
 # These MUST NOT be set via config files.
 # CLI / environment only.
 FORCE=false
-VERBOSE=false
+VERIFY="${VERIFY:-true}"
+VERBOSE="${VERBOSE:-false}"
 DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
@@ -87,6 +89,7 @@ info() {
     log "Info: $*"
 }
 vlog() {
+    $VERBOSE || return 0
     log "Verbose: $*"
 }
 warn() {
@@ -103,6 +106,8 @@ error() {
 ########################################
 
 state_set() {
+    touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
+
     local key="$1"
     local value="$2"
 
@@ -159,6 +164,8 @@ load_config_chain() {
 ########################################
 
 prepare() {
+    touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable: $STATEFILE"
+
     vlog "prepare__ start"
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
@@ -193,7 +200,7 @@ take_snapshot() {
     fi
 
     zfs snapshot -r "${POOL}/${DATASET}@${snapname}" \
-        && { telemetry_event "info" "snapshot created" "script"; } \
+        && { [[ -n "${LAST_RUN_ID:-}" ]] && telemetry_event "info" "snapshot created" "script"; } \
         || { error "Snapshot creation failed"; telemetry_event "error" "Snapshot creation failed" "script"; }
 
     LAST_SNAPSHOT="${POOL}/${DATASET}@${snapname}"
@@ -208,12 +215,12 @@ backup_blockchain() {
     vlog "backup_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync "${RSYNC_OPTS[@]}" ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
     log "Starting rsync from ${SRCDIR}/ to ${DESTDIR}/"
-    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" ${SRCDIR}/ ${DESTDIR}/
+    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"
 rsync_exit=$?
 
 case "$rsync_exit" in
@@ -222,12 +229,12 @@ case "$rsync_exit" in
     ;;
   23|24)
     warn "rsync completed with warnings code=$rsync_exit"
-    db_log_event "warn" "rsync returned code $rsync_exit" "script"
+    [[ -n "${LAST_RUN_ID:-}" ]] && db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
   *)
     error "rsync failed code=$rsync_exit"
     telemetry_event "error" "rsync failed code=$rsync_exit" "script"
-    db_log_event "warn" "rsync returned code $rsync_exit" "script"
+    [[ -n "${LAST_RUN_ID:-}" ]] && db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
 esac
 
@@ -242,15 +249,19 @@ restore_blockchain() {
     [ "$FORCE" = true ] || error "Restore requires FORCE=true"
 
     warn "RESTORE MODE – this will overwrite live data"
+if [ -t 0 ]; then
     read -r -p "Type YES to continue: " confirm
     [ "$confirm" = "YES" ] || error "Restore aborted by user"
 
     vlog "restore_blockchain__ start"
 
-    rsync "${RSYNC_OPTS[@]}" ${DESTDIR}/ ${SRCDIR}/ \
+    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/" \
         || error "Restore failed"
 
     vlog "restore_blockchain__ done"
+else
+    error "Restore requires interactive terminal"
+fi
 }
 
 ########################################
@@ -263,11 +274,11 @@ merge_dirs() {
     take_snapshot
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync "${RSYNC_OPTS[@]}" ${SRCDIR}/ ${DESTDIR}/"
+        log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    rsync "${RSYNC_OPTS[@]}" ${SRCDIR}/ ${DESTDIR}/ \
+    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/" \
         || error "Merge rsync failed"
 
     log "Merge completed successfully"
@@ -298,7 +309,7 @@ verify_backup() {
     log "Running rsync dry-run verify (no delete, no checksum)"
     rsync -nav \
         "${RSYNC_EXCLUDES[@]}" \
-        $SRCDIR/" "$DESTDIR/ \
+        "$SRCDIR/" "$DESTDIR/" \
         >"/tmp/verify-${SERVICE}.log"
 
     if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
@@ -419,7 +430,10 @@ EOF
 db_open_run() {
   local started_at
   started_at="$(date '+%Y-%m-%d %H:%M:%S')"
-
+  command -v mysql >/dev/null 2>&1 || {
+  warn "mysql not available, skipping db run open"
+  return 0
+}
   mysql "$DB_NAME" <<SQL
 INSERT INTO blockchain_backup_runs
   (host, service, mode, started_at)
@@ -456,9 +470,10 @@ WHERE id = $LAST_RUN_ID;
 SQL
 }
 
-detect_fs_type() {
-  FS_TYPE="$(stat -f -c %T "$SRCDIR")"
-}
+#detect_fs_type() {
+#  # disabled, ggf. aufrufen in prepare
+#  FS_TYPE="$(stat -f -c %T "$SRCDIR")"
+#}
 
 init_config() {
   log "Initializing config files"
@@ -619,12 +634,22 @@ START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
 parse_cli_args "$@"
 log "Script started: mode=${MODE}, service=${SERVICE}" # todo show given args
-CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
+CT_NAME=""
+if [[ -n "${SERVICE:-}" ]]; then
+  CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
+fi
+
 $DEBUG && set -x
 
+# init-config called, SERVICE not needed
 if $INIT_CONFIG; then
   init_config
   exit 0
+fi
+
+# ab hier: normaler Betrieb -> SERVICE zwingend
+if [[ -z "${SERVICE:-}" ]]; then
+  error "SERVICE not set"
 fi
 
 load_config_chain
@@ -635,32 +660,32 @@ if $USE_USB; then
   [[ -b "$USB_ID" ]] || error "USB device not found"
   DESTDIR="$USB_MOUNT/$SERVICE"
 fi
-EXIT_CODE=0
+
 
 # --- execute part
+EXIT_CODE=0
 case "$MODE" in
     backup)
         take_snapshot
         backup_blockchain
-        verify_backup
+        $VERIFY && verify_backup || EXIT_CODE=$?
         ;;
     merge)
         merge_dirs
-        verify_backup
+        $VERIFY && verify_backup || EXIT_CODE=$?
         ;;
     verify)
-        verify_backup
+        verify_backup || EXIT_CODE=$?
         ;;
     restore)
         $FORCE || error "Restore requires --force"
         restore_blockchain
-        verify_backup
+        $VERIFY && verify_backup || EXIT_CODE=$?
         ;;
     *)
         error "Unknown MODE: $MODE"
         ;;
 esac
-EXIT_CODE=$?
 
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))

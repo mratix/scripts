@@ -1,0 +1,9 @@
+v1.0.6 – Maintenance Release
+
+- fix: init-config no longer requires SERVICE and exits early
+- fix: safe SERVICE_CT_MAP access with empty SERVICE
+- fix: rsync array handling and exit code propagation
+- fix: LOGFILE and STATEFILE default expansion
+- fix: restore mode requires interactive terminal
+- config: VERIFY, VERBOSE and STATEFILE are now honored from *.conf files
+- cleanup: minor logging and stability improvements

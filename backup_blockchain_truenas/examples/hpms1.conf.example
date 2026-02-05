@@ -1,5 +1,6 @@
 # --- hpms1.conf ---
 # letzter Override für backup_blockchain_truenas.sh
+# In *.conf *NIE* RSYNC_OPTS setzen. Überschreibt Array -> crash
 
 # hpms1.conf
 enabled=true
@@ -22,7 +23,11 @@ USE_USB=false
 USB_ID="/dev/disk/by-label/BACKUP_USB"
 
 # Logging lokal
-LOGFILE="$HOME/backup_blockchain_truenas.log"
+LOGFILE="/var/log/backup_blockchain_truenas.log}"
+STATEFILE="/var/log/backup_blockchain_truenas.state"
+
+VERIFY=true # enable always verify
+VERBOSE=true # enable verbose outputs
 
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="mysql"    # influx|mysql
