@@ -1,6 +1,7 @@
 #!/bin/bash
 # backup blockchain to nas, truenas, zfs-datasets
 version="260121-safe by Mr.AtiX"
+# https://voidbin.com/paste/c8deb910-8d82-41e0-8eb1-e7c3deba4550
 
 echo "-------------------------------------------------------------------------------"
 echo "Backup blockchain and or services to NAS"
