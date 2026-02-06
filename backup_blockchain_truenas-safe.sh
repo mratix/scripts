@@ -152,7 +152,7 @@ $LOGGER "$(date +%y%m%d%H%M%S) try stop $service"
 echo "Check active service..."
 if [ "$service" == "monerod" ]; then
     # todo parse tail -f bitmonero.log
-    # 2026-01-03 01:51:12.593	[SRV_MAIN]	INFO	global	src/daemon/protocol.h:79	Cryptonote protocol stopped successfully
+    # 2026-02-06 18:59:11.821	[SRV_MAIN]	INFO	global	src/daemon/protocol.h:79Cryptonote protocol stopped successfully
     echo "No way to check a living $service service."
     echo "Please ensure that the App is or going down."
     echo "The $service service shutdown and flushing cache takes long time."
@@ -202,8 +202,9 @@ if [ "$height" -lt 111111 ]; then
     # todo parse height from log
 
     # monerod
-    [ -f ${srcdir}/bitmonero.log ] && tail -n15 bitmonero.log | grep Synced
+    [ -f ${srcdir}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
     # todo parse height from log
+    # Synced 3372528/3604263 (93%, 231735 left, 0% of total synced, estimated 5.9 days left)
 
     # electrs
     [ -f ${srcdir}/db/bitcoin/LOG ] && tail -n20 ${srcdir}/db/bitcoin/LOG
@@ -250,17 +251,6 @@ if [ "$is_zfs" ]; then
     # zfs send -I ${dataset}@previous ${dataset}@latest | ${snaprepcmd} &&
     # todo include recursive datasets
 fi
-
-# todo snapshot btrfs subvolume
-#elif [ "$is_btrfs" ]; then
-#echo "Prepare subvolume $subvol for a snapshot..."
-#sudo btrfs subvolume list /
-#sudo btrfs subvolume create @blockchain
-#sudo btrfs subvolume create @bitcoin
-#sudo btrfs subvolume create @monero
-#sudo btrfs subvolume snapshot /var/lib/monero /.snapshots/250712-monero
-# subvol=blockchain # $nasshare ? $service ?
-#fi
 }
 
 
@@ -292,9 +282,7 @@ fi
     [ "$service" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
     [ "$service" == "bitcoind" ] && [ -f "${srcdir}/indexes/coinstats/db/CURRENT" ] && { folder[3]="indexes"; } || { folder[3]="indexes/blockfilter"; folder[4]="indexes/txindex"; }
 
-    # machine hpms1, splitted
-
-    # machine hpms1, splitted but linked
+    # machine hpms1
     [ "$service" == "monerod" ] && cp -u bitmonero*.log h* p2pstate.* rpc_ssl.* ${destdir}/
     [ "$service" == "monerod" ] && folder[1]="lmdb"
 
@@ -362,7 +350,7 @@ if [[ -n $1 ]]; then arg1=$1; fi
 [ "$arg2" == "usb" ] || [ "$arg3" == "usb" ] && use_usb=true
 
 case "$1" in
-        blockchain|btc|bitcoind|xmr|monerod)
+        btc|bitcoind|xmr|monerod)
             # default case
             [ -z "$height" ] && height=0 # preset
             [ -n "$arg2" ] && height=$2 # todo check for numeric format
