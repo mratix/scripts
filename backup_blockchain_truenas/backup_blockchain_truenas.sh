@@ -48,6 +48,8 @@ SRC_BASE=""
 DEST_BASE=""
 SRCDIR=""
 DESTDIR=""
+CLI_SERVICE=""
+CLI_MODE=""
 
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
@@ -678,10 +680,12 @@ parse_cli_args() {
     case "$1" in
       -m|--mode)
         MODE="$2"
+        CLI_MODE="$2"
         shift 2
         ;;
       -s|--service)
         SERVICE="$2"
+        CLI_SERVICE="$2"
         shift 2
         ;;
       --verbose)
@@ -720,6 +724,32 @@ parse_cli_args() {
 
 # Handle non-option arguments
 log "Non-option arguments: $*"
+}
+
+resolve_paths() {
+  local src_base dest_base
+
+  [ -n "$POOL" ]    || error "POOL not set"
+  [ -n "$DATASET" ] || error "DATASET not set"
+  [ -n "$SERVICE" ] || error "SERVICE not set"
+
+  src_base="${SRC_BASE:-/mnt/${POOL}/${DATASET}}"
+  dest_base="${DEST_BASE:-/mnt/tank/backups/${DATASET}}"
+
+  if [[ "$src_base" == *"/${SERVICE}" ]]; then
+    SRCDIR="$src_base"
+  else
+    SRCDIR="${src_base%/}/${SERVICE}"
+  fi
+
+  if [[ "$dest_base" == *"/${SERVICE}" ]]; then
+    DESTDIR="$dest_base"
+  else
+    DESTDIR="${dest_base%/}/${SERVICE}"
+  fi
+
+  SRC_BASE="$src_base"
+  DEST_BASE="$dest_base"
 }
 
 usage() {
@@ -763,10 +793,19 @@ fi
 load_config_chain
 vlog "mode=${MODE}, service=${SERVICE}" # todo: after read config, show all feeded variables
 
+if [[ -n "${CLI_MODE:-}" ]]; then
+  MODE="$CLI_MODE"
+fi
+if [[ -n "${CLI_SERVICE:-}" ]]; then
+  SERVICE="$CLI_SERVICE"
+fi
+
 # ab hier: normaler Betrieb, SERVICE zwingend
 if [[ -z "${SERVICE:-}" ]]; then
   error "SERVICE not set"
 fi
+
+resolve_paths
 
 prepare
 
