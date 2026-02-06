@@ -229,6 +229,7 @@ take_snapshot() {
 
 
 list_snapshots() {
+    # simple list output
     log "List of blockchain-relevant snapshots: $SERVICE"
 
     zfs list -t snapshot -o name,creation \
@@ -248,6 +249,63 @@ list_snapshots() {
             }
         ' \
         | sort -k3,3
+}
+
+list_snapshots_table() {
+    # improved as table output
+    log "List of blockchain-relevant snapshots: $SERVICE"
+
+    local w_type=8
+    local w_snap=25
+    local w_date=24
+    local hr_type hr_snap hr_date
+    local top mid bottom
+    local entries
+
+    hr_type=$(printf '%*s' $((w_type + 2)) '' | tr ' ' '─')
+    hr_snap=$(printf '%*s' $((w_snap + 2)) '' | tr ' ' '─')
+    hr_date=$(printf '%*s' $((w_date + 2)) '' | tr ' ' '─')
+
+    top="┌${hr_type}┬${hr_snap}┬${hr_date}┐"
+    mid="├${hr_type}┼${hr_snap}┼${hr_date}┤"
+    bottom="└${hr_type}┴${hr_snap}┴${hr_date}┘"
+
+    entries=$(
+        zfs list -t snapshot -o name,creation \
+            | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
+                $1 ~ "^"ds {
+                    snap=$1
+                    sub("^.*@", "", snap)
+
+                    type="unknown"
+                    if (snap ~ /^manual-/) type="MANUAL"
+                    else if (snap ~ /^backup-/) type="MANUAL"
+                    else if (snap ~ /^import-/) type="IMPORT"
+                    else if (snap ~ /^script-/) type="SCRIPT"
+                    else if (snap ~ /^auto-/) type="AUTO"
+
+                    printf "%s|%s|%s\n", type, snap, $2" "$3" "$4" "$5
+                }
+            ' \
+            | sort -k3,3
+    )
+
+    printf '%s\n' "$top"
+    printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "TYPE" "$w_snap" "SNAPSHOT" "$w_date" "CREATED"
+    printf '%s\n' "$mid"
+
+    if [ -z "$entries" ]; then
+        printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "-" "$w_snap" "no snapshots found" "$w_date" "-"
+    else
+        while IFS='|' read -r type snap created; do
+            type=${type:0:$w_type}
+            snap=${snap:0:$w_snap}
+            created=${created:0:$w_date}
+            printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "$type" "$w_snap" "$snap" "$w_date" "$created"
+        done <<<"$entries"
+    fi
+
+    printf '%s\n' "$bottom"
 }
 
 ########################################
