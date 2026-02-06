@@ -1,7 +1,6 @@
 #!/bin/bash
 # backup blockchain to nas, truenas, zfs-datasets
 version="260121-safe by Mr.AtiX"
-# https://voidbin.com/paste/c8deb910-8d82-41e0-8eb1-e7c3deba4550
 
 echo "-------------------------------------------------------------------------------"
 echo "Backup blockchain and or services to NAS"
@@ -116,9 +115,10 @@ fi
 # pruned service
     [[ "$prune" == true ]] && destdir=${destdir}-prune
 
-# rsync options, attention for monerod: no --inplace, no --append
+# rsync options, attention for monerod: no -z, no --inplace, no --append
     [ "$service" == "bitcoind" ] && rsync_opts="-avihH -P --fsync --mkpath --stats --delete"
-#    [ "$service" == "monerod" ] && rsync_opts="-avz -P --inplace --append-verify"
+    #[ "$service" == "monerod" ] && rsync_opts="-a -P --numeric-ids --delete --info=progress2"
+    [ "$service" == "monerod" ] && rsync_opts="-a -P --delete --info=progress2 --no-compress"
     [[ "$restore" == true ]] && rsync_opts="-avz -P --append-verify --info=progress2"
 
 # output results

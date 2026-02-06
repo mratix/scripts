@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.6
+# Gold Release v1.0.7
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS
@@ -64,7 +64,7 @@ declare -A SERVICE_CT_MAP=(
   [chia]="ix-chia-farmer-1"
 )
 TELEMETRY_ENABLED=false
-TELEMETRY_BACKEND=""    # influx|mysql
+TELEMETRY_BACKEND=""    # influx
 
 # Runtime flags:
 # These MUST NOT be set via config files.
@@ -75,6 +75,7 @@ VERBOSE="${VERBOSE:-false}"
 DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
+STOP_SERVICE_BEFORE_BACKUP=true
 
 ########################################
 # Logging helpers
@@ -132,16 +133,22 @@ load_config() {
     local cfg
 
     for cfg in "$@"; do
-        if [ -f "$cfg" ]; then
+        if [[ -f "$cfg" ]]; then
             log "Loading config: $cfg"
-            # syntax check
-            command -v shellcheck >/dev/null 2>&1 shellcheck source=$cfg || vlog "load_config__ shellcheck not found"
-	    source "$cfg"
+
+            if ! bash -n "$cfg" 2>/dev/null; then
+                warn "Syntax error in config file, skipping: $cfg"
+                continue
+            fi
+
+            # shellcheck source=/dev/null
+            source "$cfg"
         else
             vlog "Config file not found, skipping: $cfg"
         fi
     done
 }
+
 
 # Load configuration files (order matters)
 #   default.conf → machine.conf → $THIS_HOST.conf
@@ -173,7 +180,7 @@ prepare() {
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
     log "  DESTDIR=${DESTDIR}"
-sleep 5 # give some time to look at the output
+sleep 4 # give some time to look at the output
     [ -n "$SERVICE" ] || error "SERVICE not set"
     [ -n "$POOL" ]    || error "POOL not set"
     [ -n "$DATASET" ] || error "DATASET not set"
@@ -189,23 +196,31 @@ sleep 5 # give some time to look at the output
 ########################################
 
 take_snapshot() {
-    local snapname
+    local snapname dataset
     snapname="script-$(date +%Y-%m-%d_%H-%M-%S)"
-
-    log "Snapshot ${POOL}/${DATASET}/${SERVICE}@${snapname} taken."
+    dataset="${POOL}/${DATASET}/${SERVICE}"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: zfs snapshot -r ${POOL}/${DATASET}/${SERVICE}@${snapname}"
+        log "DRY-RUN: zfs snapshot -r ${dataset}@${snapname}"
         return 0
     fi
 
-    zfs snapshot -r "${POOL}/${DATASET}/${SERVICE}@${snapname}" \
-        && { [[ -n "${LAST_RUN_ID:-}" ]] && telemetry_event "info" "snapshot created" "script"; } \
-        || { error "Snapshot creation failed"; telemetry_event "error" "Snapshot creation failed" "script"; }
+    log "Creating snapshot: ${dataset}@${snapname}"
 
-    LAST_SNAPSHOT="${POOL}/${DATASET}/${SERVICE}@${snapname}"
+    if ! zfs snapshot -r "${dataset}@${snapname}"; then
+        error "Snapshot creation failed: ${dataset}@${snapname}"
+    fi
+
+    LAST_SNAPSHOT="${dataset}@${snapname}"
     state_set last_snapshot "$LAST_SNAPSHOT"
+
+    if [ "$TELEMETRY_ENABLED" = true ]; then
+        telemetry_event "info" "snapshot created" "script"
+    fi
+
+    log "Snapshot created successfully: ${LAST_SNAPSHOT}"
 }
+
 
 list_snapshots() {
     log "Listing snapshots for service: $SERVICE"
@@ -249,14 +264,11 @@ case "$rsync_exit" in
   0)
     log "rsync completed successfully"
     ;;
-  23|24)
+23|24)
     warn "rsync completed with warnings code=$rsync_exit"
-    [[ -n "${LAST_RUN_ID:-}" ]] && db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
-  *)
+*)
     error "rsync failed code=$rsync_exit"
-    telemetry_event "error" "rsync failed code=$rsync_exit" "script"
-    [[ -n "${LAST_RUN_ID:-}" ]] && db_log_event "warn" "rsync returned code $rsync_exit" "script"
     ;;
 esac
 
@@ -344,45 +356,139 @@ verify_backup() {
     vlog "verify_backup__ done"
 }
 
+service_stop() {
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    log "Stopping service container: $ct"
+    docker stop "$ct" >/dev/null 2>&1 || warn "Failed to stop $ct"
+}
+
+service_start() {
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    log "Starting service container: $ct"
+    docker start "$ct" >/dev/null 2>&1 || warn "Failed to start $ct"
+}
+
+docker_exec() {
+    local service="$1"
+    shift
+
+    local ct="${SERVICE_CT_MAP[$service]:-}"
+    [[ -n "$ct" ]] || return 1
+
+    docker exec "$ct" "$@" 2>/dev/null
+}
+
+get_block_height() {
+    local ct
+    ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
+    [[ -n "$ct" ]] || return 1
+
+    case "$SERVICE" in
+        bitcoind)
+            docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
+            ;;
+        monerod)
+            docker exec "$ct" monerod status 2>/dev/null \
+              | awk '/Height:/ {print $2}'
+            ;;
+        chia)
+            docker exec "$ct" chia blockchain height 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 
 ########################################
 # Metrics / audit
 ########################################
 
 collect_metrics() {
-    local runtime="$1" exit_code="$2" diskusage src_size dst_size
+    METRIC_RUNTIME="${1:-0}"
+    METRIC_EXIT_CODE="${2:-0}"
 
-    src_size="$(du -sb "$SRCDIR" 2>/dev/null | awk '{print $1}')"
-    dst_size="$(du -sb "$DESTDIR" 2>/dev/null | awk '{print $1}')"
-    diskusage="$(du -shL "$SRCDIR" 2>/dev/null | awk '{print $1}')"
+    METRIC_SRC_SIZE="$(du -sb "$SRCDIR" 2>/dev/null | awk '{print $1}' || echo 0)"
+    METRIC_DST_SIZE="$(du -sb "$DESTDIR" 2>/dev/null | awk '{print $1}' || echo 0)"
+    METRIC_DISKUSAGE="$(du -shL "$SRCDIR" 2>/dev/null | awk '{print $1}' || echo 0)"
 
-    state_set last_run_service   "$SERVICE"
-    state_set last_run_mode      "$MODE"
-    state_set last_run_runtime_s "$runtime"
-    state_set last_run_diskusage "$diskusage"
-    state_set last_run_exit_code "$exit_code"
+    METRIC_SNAPSHOT_COUNT="$(zfs list -t snapshot -o name 2>/dev/null \
+        | grep "^${POOL}/${DATASET}/${SERVICE}@" \
+        | wc -l || echo 0)"
 
-    $TELEMETRY_ENABLED && send_telemetry \
-        "$runtime" "$exit_code" "$src_size" "$dst_size"
+    METRIC_SERVICE="$SERVICE"
+    METRIC_MODE="$MODE"
+
+    METRIC_BLOCK_HEIGHT=""
+    if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
+        METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
+    fi
+
+    [[ -n "$METRIC_BLOCK_HEIGHT" ]] && state_set block_height "$METRIC_BLOCK_HEIGHT"
+    state_set snapshot_count "$METRIC_SNAPSHOT_COUNT"
+    state_set last_run_service "$METRIC_SERVICE"
+    state_set last_run_mode "$METRIC_MODE"
+    state_set last_run_runtime_s "$METRIC_RUNTIME"
+    state_set last_run_exit_code "$METRIC_EXIT_CODE"
+}
+
+telemetry_run_end() {
+    $TELEMETRY_ENABLED || return 0
+
+    case "$TELEMETRY_BACKEND" in
+        syslog) telemetry_syslog ;;
+        http|influx) telemetry_http ;;
+        none|"") return 0 ;;
+        *) warn "Unknown telemetry backend: $TELEMETRY_BACKEND" ;;
+    esac
+}
+
+
+telemetry_http() {
+    curl -fsS -XPOST "$INFLUX_URL" \
+        --data-binary \
+        "backup,host=$THIS_HOST,service=$SERVICE \
+runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_HEIGHT}"
+}
+
+
+telemetry_syslog() {
+    logger -t backup_blockchain \
+      "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
+snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
+}
+
+
+telemetry_none() {
+  return 0
 }
 
 telemetry_event() {
- if [ "$TELEMETRY_ENABLED" = true ]; then
-    local level="$1"
-    local msg="$2"
-    local source="${3:-script}"
+  local level="$1"
+  local msg="$2"
+  local source="${3:-script}"
 
-    [[ "$TELEMETRY_BACKEND" = "mysql" ]] || return 0
-    [[ -n "${LAST_RUN_ID:-}" ]] || return 0
-
-    mysql ... -e "
-      INSERT INTO blockchain_backup_events
-        (run_id, level, message, source, created_at)
-      VALUES
-        (${LAST_RUN_ID}, '$level', '$msg', '$source', NOW());
-    " >/dev/null 2>&1 || true
-  fi
+  case "$TELEMETRY_BACKEND" in
+    none|"")
+      return 0
+      ;;
+    syslog)
+      telemetry_syslog "$level" "$msg" "$source"
+      ;;
+    http)
+      telemetry_http "$level" "$msg" "$source"
+      ;;
+    *)
+      warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
+      ;;
+  esac
 }
+
 
 send_telemetry() {
  if [ "$TELEMETRY_ENABLED" = true ]; then
@@ -390,13 +496,11 @@ send_telemetry() {
 
     case "$TELEMETRY_BACKEND" in
         influx)
-            #curl -sS -XPOST "$INFLUX_URL/write?db=$INFLUX_DB" \
-            #  --data-binary \
-            #  "backup,host=$THIS_HOST,service=$SERVICE,mode=$MODE runtime=${runtime},exit=${exit},src=${src},dst=${dst}"
+#            curl -sS -XPOST "$INFLUX_URL/api/v2/write?org=$ORG&bucket=$BUCKET&precision=s" \
+#  -H "Authorization: Token $INFLUX_TOKEN" \
+#  --data-binary \
+#  "backup,host=$THIS_HOST,service=$SERVICE mode=\"$MODE\",runtime=$RUNTIME,exit=$EXIT_CODE"
             send_telemetry_influx "$runtime" "$exit" "$src" "$dst"
-            ;;
-        mysql)
-            send_telemetry_mysql "$runtime" "$exit" "$src" "$dst"
             ;;
         *)
             warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
@@ -405,102 +509,24 @@ send_telemetry() {
   fi
 }
 
-send_telemetry_mysql() {
- if [ "$TELEMETRY_ENABLED" = true ]; then
-    local runtime="$1"
-    local exit="$2"
-    local src="$3"
-    local dst="$4"
 
-    # Sanity checks
-    command -v mysql >/dev/null 2>&1 || {
-        warn "mysql client not found, skipping telemetry"
-        return 0
-    }
-
-    [[ -n "${MYSQL_DB:-}" && -n "${MYSQL_USER:-}" ]] || {
-        warn "MySQL telemetry not configured, skipping"
-        return 0
-    }
-
-    local sql
-    sql=$(cat <<EOF
-INSERT INTO ${MYSQL_TABLE} (
-    host, service, mode,
-    runtime_s, exit_code,
-    src_size_b, dst_size_b,
-    snapshot
-) VALUES (
-    '${THIS_HOST}',
-    '${SERVICE}',
-    '${MODE}',
-    ${runtime},
-    ${exit},
-    ${src:-NULL},
-    ${dst:-NULL},
-    '${LAST_SNAPSHOT:-}'
-);
-EOF
-)
-
-    mysql \
-        -h "${MYSQL_HOST:-localhost}" \
-        -P "${MYSQL_PORT:-3306}" \
-        -u "$MYSQL_USER" \
-        -p"$MYSQL_PASS" \
-        "$MYSQL_DB" \
-        -e "$sql" \
-        >/dev/null 2>&1 \
-        || warn "MySQL telemetry insert failed"
-  fi
+send_telemetry_syslog() {
+logger -t backup_blockchain \
+  "service=$SERVICE mode=$MODE exit=$EXIT_CODE runtime=${RUNTIME}s snapshot=${LAST_SNAPSHOT:-}"
 }
 
-# error: mysql-client is on truenas not available, package installations are strict denied
-db_open_run() {
- if [ "$TELEMETRY_ENABLED" = true ]; then
-  local started_at
-  started_at="$(date '+%Y-%m-%d %H:%M:%S')"
-  command -v mysql >/dev/null 2>&1 || {
-  warn "mysql not available, skipping db run open"
-  return 0
-}
-  mysql "$DB_NAME" <<SQL
-INSERT INTO blockchain_backup_runs
-  (host, service, mode, started_at)
-VALUES
-  ('$THIS_HOST', '$SERVICE', '$MODE', '$started_at');
-SQL
-
-  LAST_RUN_ID=$(mysql "$DB_NAME" -N -s -e "SELECT LAST_INSERT_ID();")
-  [[ -n "$LAST_RUN_ID" ]] || error "Failed to obtain LAST_RUN_ID"
-
-  log "DB run opened (id=$LAST_RUN_ID)"
-  fi
-}
-
-db_log_event() {
- if [ "$TELEMETRY_ENABLED" = true ]; then
-  local level="$1"
-  local msg="$2"
-  local source="$3"
-
-  mysql "$DB_NAME" <<SQL
-INSERT INTO blockchain_backup_events
-  (run_id, level, message, source, created_at)
-VALUES
-  ($LAST_RUN_ID, '$level', '$msg', '$source', NOW());
-SQL
-  fi
-}
-
-db_close_run() {
-  mysql "$DB_NAME" <<SQL
-UPDATE blockchain_backup_runs
-SET
-  runtime_s = $RUNTIME,
-  exit_code = $EXIT_CODE
-WHERE id = $LAST_RUN_ID;
-SQL
+send_telemetry_http() {
+  curl -fsS -X POST "$TELEMETRY_URL" \
+    -H "Authorization: Bearer $TELEMETRY_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"host\": \"$THIS_HOST\",
+      \"service\": \"$SERVICE\",
+      \"mode\": \"$MODE\",
+      \"runtime\": $RUNTIME,
+      \"exit\": $EXIT_CODE,
+      \"snapshot\": \"${LAST_SNAPSHOT:-}\"
+    }" || true
 }
 
 
@@ -515,7 +541,7 @@ init_config() {
   create_cfg "${host}.conf.example"   host
 
   log "Config initialization complete"
-  vlog "Edit the files and rerun without --init-config"
+  log "Edit the files and rerun without --init-config"
 }
 
 create_cfg() {
@@ -565,8 +591,8 @@ EOF
 # Last in precedence chain
 
 # Example:
-# SERVICE="bitcoind"
-# LOGFILE="/var/log/backup_blockchain_truenas.log"
+SERVICE="bitcoind"
+LOGFILE="/var/log/backup_blockchain_truenas.log"
 EOF
       ;;
     *)
@@ -683,7 +709,6 @@ if [[ -z "${SERVICE:-}" ]]; then
 fi
 
 prepare
-db_open_run
 
 if $USE_USB; then
   [[ -b "$USB_ID" ]] || error "USB device not found"
@@ -695,8 +720,10 @@ fi
 EXIT_CODE=0
 case "$MODE" in
     backup)
+        $STOP_SERVICE_BEFORE_BACKUP && service_stop
         take_snapshot
         backup_blockchain
+        service_start
         $VERIFY && verify_backup || EXIT_CODE=$?
         $VERBOSE && list_snapshots
         ;;
@@ -715,7 +742,7 @@ case "$MODE" in
         list_snapshots
         ;;
 esac
-
+# --- execute part done ---
 
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
@@ -724,11 +751,12 @@ RUNTIME=$((END_TS - START_TS))
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 collect_metrics "$RUNTIME" "$EXIT_CODE"
+telemetry_run_end "$RUNTIME" "$EXIT_CODE"
 log "Script finished successfully"
 exit "$EXIT_CODE"
 
 # ----------------------------------------------------------
 
-Automount minimal:
-mount | grep "$USB_MOUNT"
-mount "$USB_ID" "$USB_MOUNT"
+# Automount minimal:
+# mount | grep "$USB_MOUNT"
+# mount "$USB_ID" "$USB_MOUNT"
