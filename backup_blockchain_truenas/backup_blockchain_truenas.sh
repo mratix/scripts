@@ -154,14 +154,17 @@ load_config() {
 
 
 # Load configuration files (order matters)
-#   default.conf → machine.conf → $THIS_HOST.conf
+#   default.conf -> machine.conf -> $THIS_HOST.conf
 load_config_chain() {
     local cfg
+    local scriptdir
 
-    # error: config files are normal in script-dir not $PWD located
-    for cfg in "./config.conf" "./default.conf" "./machine.conf" "./${THIS_HOST}.conf"; do
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # config files live in the script directory, not the caller's $PWD
+    for cfg in "${script_dir}/config.conf" "${script_dir}/default.conf" "${script_dir}/machine.conf" "${script_dir}/${THIS_HOST}.conf"; do
         if [[ -f "$cfg" ]]; then
-            #todo: check validity/acceptance of readed parameters
+            #todo: check validity/acceptance of read parameters
             load_config "$cfg"
         else
             vlog "Config file not found, skipping: $cfg"
@@ -763,4 +766,3 @@ log "Script finished successfully"
 exit "$EXIT_CODE"
 
 # ----------------------------------------------------------
-
