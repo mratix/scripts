@@ -42,22 +42,21 @@ set -Eeuo pipefail
 
 MODE="backup"                   # backup | merge | verify | restore
 SERVICE=""                      # bitcoind|monerod|chia
-POOL="${POOL:-}"
-DATASET="${DATASET:-}"
+POOL=""
+DATASET=""
 SRC_BASE=""
 DEST_BASE=""
 SRCDIR=""
 DESTDIR=""
+
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude=.zfs
   --exclude=.zfs/*
   --exclude=.snapshot
 )
-
 LOGFILE="${LOGFILE:-/var/log/backup_blockchain_truenas.log}"
 STATEFILE="${STATEFILE:-/var/log/backup_blockchain_truenas.state}"
-
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
@@ -78,7 +77,8 @@ VERBOSE="${VERBOSE:-false}"
 DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
-STOP_SERVICE_BEFORE_BACKUP=true
+SERVICE_STOP_BEFORE=true
+SERVICE_START_AFTER=true
 
 ########################################
 # Logging helpers
@@ -199,22 +199,22 @@ sleep 4 # give some time to look at the output
 ########################################
 
 take_snapshot() {
-    local snapname dataset
+    local snapdataset snapname
+    snapdataset="${POOL}/${DATASET}/${SERVICE}"
     snapname="script-$(date +%Y-%m-%d_%H-%M-%S)"
-    dataset="${POOL}/${DATASET}/${SERVICE}"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: zfs snapshot -r ${dataset}@${snapname}"
+        log "DRY-RUN: zfs snapshot -r ${snapdataset}@${snapname}"
         return 0
     fi
 
-    log "Creating snapshot: ${dataset}@${snapname}"
+    log "Creating snapshot: ${snapdataset}@${snapname}"
 
-    if ! zfs snapshot -r "${dataset}@${snapname}"; then
-        error "Snapshot creation failed: ${dataset}@${snapname}"
+    if ! zfs snapshot -r "${snapdataset}@${snapname}"; then
+        error "Snapshot creation failed: ${snapdataset}@${snapname}"
     fi
 
-    LAST_SNAPSHOT="${dataset}@${snapname}"
+    LAST_SNAPSHOT="${snapdataset}@${snapname}"
     state_set last_snapshot "$LAST_SNAPSHOT"
 
     if [ "$TELEMETRY_ENABLED" = true ]; then
@@ -226,7 +226,7 @@ take_snapshot() {
 
 
 list_snapshots() {
-    log "Listing snapshots for service: $SERVICE"
+    log "List of blockchain-relevant snapshots: $SERVICE"
 
     zfs list -t snapshot -o name,creation \
         | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
@@ -279,23 +279,24 @@ esac
 }
 
 ########################################
-# Restore (never headless)
+# Restore (interactive, never headless)
 ########################################
 
 restore_blockchain() {
     [ "$FORCE" = true ] || error "Restore requires FORCE=true"
 
-    warn "RESTORE MODE – this will overwrite live data"
+    warn "RESTORE MODE – this will overwrite local data"
 if [ -t 0 ]; then
     read -r -p "Type YES to continue: " confirm
     [ "$confirm" = "YES" ] || error "Restore aborted by user"
+    service_stop
 
     vlog "restore_blockchain__ start"
-
     rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/" \
         || error "Restore failed"
 
     vlog "restore_blockchain__ done"
+    # service_start # never autostart after restore
 else
     error "Restore requires interactive terminal"
 fi
@@ -308,7 +309,7 @@ fi
 merge_dirs() {
     vlog "merge_dirs__ start"
 
-    take_snapshot
+    #take_snapshot  # take snapshot of destination-dataset, not the source
 
     if [ "$DRY_RUN" = true ]; then
         log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
@@ -714,8 +715,9 @@ fi
 prepare
 
 if $USE_USB; then
-  [[ -b "$USB_ID" ]] || error "USB device not found"
-  DESTDIR="$USB_MOUNT/$SERVICE"
+  [[ -b "$USB_ID" ]] && DESTDIR="$USB_MOUNT/$DATASET/$SERVICE" || error "USB device not found"
+  # Automount minimal
+  # mount | grep "$USB_MOUNT" || mount "$USB_ID" "$USB_MOUNT"
 fi
 
 
@@ -723,26 +725,28 @@ fi
 EXIT_CODE=0
 case "$MODE" in
     backup)
-        $STOP_SERVICE_BEFORE_BACKUP && service_stop
+        $SERVICE_STOP_BEFORE && service_stop
         take_snapshot
         backup_blockchain
-        service_start
+        $SERVICE_START_AFTER && service_start
         $VERIFY && verify_backup || EXIT_CODE=$?
         $VERBOSE && list_snapshots
         ;;
     merge)
+        $SERVICE_STOP_BEFORE && service_stop
         merge_dirs
         $VERIFY && verify_backup || EXIT_CODE=$?
         $VERBOSE && list_snapshots
+        #$SERVICE_START_AFTER && service_start
         ;;
     verify)
         verify_backup || EXIT_CODE=$?
         ;;
     restore)
         $FORCE || error "Restore requires --force"
+        $SERVICE_STOP_BEFORE && service_stop
         restore_blockchain
         $VERIFY && verify_backup || EXIT_CODE=$?
-        list_snapshots
         ;;
 esac
 # --- execute part done ---
@@ -760,6 +764,3 @@ exit "$EXIT_CODE"
 
 # ----------------------------------------------------------
 
-# Automount minimal:
-# mount | grep "$USB_MOUNT"
-# mount "$USB_ID" "$USB_MOUNT"
