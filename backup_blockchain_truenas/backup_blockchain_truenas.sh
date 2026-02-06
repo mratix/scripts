@@ -228,10 +228,7 @@ take_snapshot() {
 }
 
 
-list_snapshots() {
-    # simple list output
-    log "List of blockchain-relevant snapshots: $SERVICE"
-
+list_snapshots_entries() {
     zfs list -t snapshot -o name,creation \
         | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
             $1 ~ "^"ds {
@@ -245,16 +242,21 @@ list_snapshots() {
                 else if (snap ~ /^script-/) type="SCRIPT"
                 else if (snap ~ /^auto-/) type="AUTO"
 
-                printf "%-8s | %-25s | %s\n", type, snap, $2" "$3" "$4" "$5
+                printf "%s|%s|%s\n", type, snap, $2" "$3" "$4" "$5
             }
         ' \
         | sort -k3,3
 }
 
-list_snapshots_table() {
-    # improved as table output
-    log "List of blockchain-relevant snapshots: $SERVICE"
+list_snapshots_simple() {
+    local entry type snap created
 
+    while IFS='|' read -r type snap created; do
+        printf "%-8s | %-25s | %s\n" "$type" "$snap" "$created"
+    done < <(list_snapshots_entries)
+}
+
+list_snapshots_table() {
     local w_type=8
     local w_snap=25
     local w_date=24
@@ -270,25 +272,7 @@ list_snapshots_table() {
     mid="├${hr_type}┼${hr_snap}┼${hr_date}┤"
     bottom="└${hr_type}┴${hr_snap}┴${hr_date}┘"
 
-    entries=$(
-        zfs list -t snapshot -o name,creation \
-            | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
-                $1 ~ "^"ds {
-                    snap=$1
-                    sub("^.*@", "", snap)
-
-                    type="unknown"
-                    if (snap ~ /^manual-/) type="MANUAL"
-                    else if (snap ~ /^backup-/) type="MANUAL"
-                    else if (snap ~ /^import-/) type="IMPORT"
-                    else if (snap ~ /^script-/) type="SCRIPT"
-                    else if (snap ~ /^auto-/) type="AUTO"
-
-                    printf "%s|%s|%s\n", type, snap, $2" "$3" "$4" "$5
-                }
-            ' \
-            | sort -k3,3
-    )
+    entries=$(list_snapshots_entries)
 
     printf '%s\n' "$top"
     printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "TYPE" "$w_snap" "SNAPSHOT" "$w_date" "CREATED"
@@ -307,6 +291,17 @@ list_snapshots_table() {
 
     printf '%s\n' "$bottom"
 }
+
+list_snapshots() {
+    log "List of blockchain-relevant snapshots: $SERVICE"
+
+    if [ "$VERBOSE" = true ]; then
+        list_snapshots_simple
+    else
+        list_snapshots_table
+    fi
+}
+
 
 ########################################
 # Backup (rsync-based)
