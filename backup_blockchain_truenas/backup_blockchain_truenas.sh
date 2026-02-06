@@ -46,16 +46,14 @@ POOL="${POOL:-}"
 DATASET="${DATASET:-}"
 SRC_BASE=""
 DEST_BASE=""
-SRCDIR="${SRCDIR:-$SRC_BASE/$SERVICE}"
-DESTDIR="${DESTDIR:-$DEST_BASE/$SERVICE}"
-#FS_TYPE="${FS_TYPE:-unknown}" # unbenutzt
+SRCDIR=""
+DESTDIR=""
+RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude=.zfs
   --exclude=.zfs/*
   --exclude=.snapshot
 )
-
-RSYNC_OPTS=(-avihH --numeric-ids --delete --stats --info=progress2)
 
 LOGFILE="${LOGFILE:-/var/log/backup_blockchain_truenas.log}"
 STATEFILE="${STATEFILE:-/var/log/backup_blockchain_truenas.state}"
@@ -90,10 +88,10 @@ info() {
 }
 vlog() {
     $VERBOSE || return 0
-    log "Verbose: $*"
+    log "$*"
 }
 warn() {
-    log "WARNING: $*"
+    log "Warning: $*"
 }
 error() {
     log "ERROR: $*"
@@ -108,14 +106,14 @@ error() {
 state_set() {
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
-    local key="$1"
-    local value="$2"
-
-    if [ -f "$STATEFILE" ] && grep -q "^${key}=" "$STATEFILE"; then
+  if [ -f "$STATEFILE" ]; then
+    local key="$1" value="$2"
+    if grep -q "^${key}=" "$STATEFILE"; then
         sed -i "s|^${key}=.*|${key}=${value}|" "$STATEFILE"
     else
         echo "${key}=${value}" >> "$STATEFILE"
     fi
+  fi
 }
 
 ########################################
@@ -123,7 +121,7 @@ state_set() {
 ########################################
 
 # Usage:
-#   load_config default.conf hpms1.conf machine.conf
+#   load_config machine.conf|your_config.conf
 #
 # Rules:
 # - Later files override earlier ones
@@ -136,10 +134,11 @@ load_config() {
     for cfg in "$@"; do
         if [ -f "$cfg" ]; then
             log "Loading config: $cfg"
-            # shellcheck source=/dev/null
-            source "$cfg"
+            # syntax check
+            command -v shellcheck >/dev/null 2>&1 shellcheck source=$cfg || vlog "load_config__ shellcheck not found"
+	    source "$cfg"
         else
-            warn "Config file not found, skipping: $cfg"
+            vlog "Config file not found, skipping: $cfg"
         fi
     done
 }
@@ -149,11 +148,13 @@ load_config() {
 load_config_chain() {
     local cfg
 
+    # error: config files are normal in script-dir not $PWD located
     for cfg in "./config.conf" "./default.conf" "./machine.conf" "./${THIS_HOST}.conf"; do
         if [[ -f "$cfg" ]]; then
+            #todo: check validity/acceptance of readed parameters
             load_config "$cfg"
         else
-            log "WARNING: Config file not found, skipping: $cfg"
+            vlog "Config file not found, skipping: $cfg"
         fi
     done
 }
@@ -167,20 +168,19 @@ prepare() {
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable: $STATEFILE"
 
     vlog "prepare__ start"
+    log "Given is:"
+    log "  POOL=${POOL} DATASET=${DATASET} SERVICE=${SERVICE}"
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
     log "  DESTDIR=${DESTDIR}"
-    log "  POOL=${POOL} DATASET=${DATASET}"
-
+sleep 5 # give some time to look at the output
     [ -n "$SERVICE" ] || error "SERVICE not set"
     [ -n "$POOL" ]    || error "POOL not set"
     [ -n "$DATASET" ] || error "DATASET not set"
     [ -n "$SRCDIR" ]  || error "SRCDIR not set"
     [ -n "$DESTDIR" ] || error "DESTDIR not set"
     [ -d "$SRCDIR" ]  || error "Source directory does not exist: $SRCDIR"
-
     mkdir -p "$DESTDIR" || error "Failed to create destination: $DESTDIR"
-
     vlog "prepare__ done"
 }
 
@@ -190,21 +190,43 @@ prepare() {
 
 take_snapshot() {
     local snapname
-    snapname="backup-$(date +%Y-%m-%d_%H-%M-%S)"
+    snapname="script-$(date +%Y-%m-%d_%H-%M-%S)"
 
-    log "Snapshot ${POOL}/${DATASET}@${snapname} taken."
+    log "Snapshot ${POOL}/${DATASET}/${SERVICE}@${snapname} taken."
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: zfs snapshot -r ${POOL}/${DATASET}@${snapname}"
+        log "DRY-RUN: zfs snapshot -r ${POOL}/${DATASET}/${SERVICE}@${snapname}"
         return 0
     fi
 
-    zfs snapshot -r "${POOL}/${DATASET}@${snapname}" \
+    zfs snapshot -r "${POOL}/${DATASET}/${SERVICE}@${snapname}" \
         && { [[ -n "${LAST_RUN_ID:-}" ]] && telemetry_event "info" "snapshot created" "script"; } \
         || { error "Snapshot creation failed"; telemetry_event "error" "Snapshot creation failed" "script"; }
 
-    LAST_SNAPSHOT="${POOL}/${DATASET}@${snapname}"
+    LAST_SNAPSHOT="${POOL}/${DATASET}/${SERVICE}@${snapname}"
     state_set last_snapshot "$LAST_SNAPSHOT"
+}
+
+list_snapshots() {
+    log "Listing snapshots for service: $SERVICE"
+
+    zfs list -t snapshot -o name,creation \
+        | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
+            $1 ~ "^"ds {
+                snap=$1
+                sub("^.*@", "", snap)
+
+                type="unknown"
+                if (snap ~ /^manual-/) type="MANUAL"
+                else if (snap ~ /^backup-/) type="MANUAL"
+                else if (snap ~ /^import-/) type="IMPORT"
+                else if (snap ~ /^script-/) type="SCRIPT"
+                else if (snap ~ /^auto-/) type="AUTO"
+
+                printf "%-8s | %-25s | %s\n", type, snap, $2" "$3" "$4" "$5
+            }
+        ' \
+        | sort -k3,3
 }
 
 ########################################
@@ -345,6 +367,7 @@ collect_metrics() {
 }
 
 telemetry_event() {
+ if [ "$TELEMETRY_ENABLED" = true ]; then
     local level="$1"
     local msg="$2"
     local source="${3:-script}"
@@ -358,9 +381,11 @@ telemetry_event() {
       VALUES
         (${LAST_RUN_ID}, '$level', '$msg', '$source', NOW());
     " >/dev/null 2>&1 || true
+  fi
 }
 
 send_telemetry() {
+ if [ "$TELEMETRY_ENABLED" = true ]; then
     local runtime="$1" exit="$2" src="$3" dst="$4"
 
     case "$TELEMETRY_BACKEND" in
@@ -377,9 +402,11 @@ send_telemetry() {
             warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
             ;;
     esac
+  fi
 }
 
 send_telemetry_mysql() {
+ if [ "$TELEMETRY_ENABLED" = true ]; then
     local runtime="$1"
     local exit="$2"
     local src="$3"
@@ -425,9 +452,12 @@ EOF
         -e "$sql" \
         >/dev/null 2>&1 \
         || warn "MySQL telemetry insert failed"
+  fi
 }
 
+# error: mysql-client is on truenas not available, package installations are strict denied
 db_open_run() {
+ if [ "$TELEMETRY_ENABLED" = true ]; then
   local started_at
   started_at="$(date '+%Y-%m-%d %H:%M:%S')"
   command -v mysql >/dev/null 2>&1 || {
@@ -445,9 +475,11 @@ SQL
   [[ -n "$LAST_RUN_ID" ]] || error "Failed to obtain LAST_RUN_ID"
 
   log "DB run opened (id=$LAST_RUN_ID)"
+  fi
 }
 
 db_log_event() {
+ if [ "$TELEMETRY_ENABLED" = true ]; then
   local level="$1"
   local msg="$2"
   local source="$3"
@@ -458,6 +490,7 @@ INSERT INTO blockchain_backup_events
 VALUES
   ($LAST_RUN_ID, '$level', '$msg', '$source', NOW());
 SQL
+  fi
 }
 
 db_close_run() {
@@ -470,10 +503,6 @@ WHERE id = $LAST_RUN_ID;
 SQL
 }
 
-#detect_fs_type() {
-#  # disabled, ggf. aufrufen in prepare
-#  FS_TYPE="$(stat -f -c %T "$SRCDIR")"
-#}
 
 init_config() {
   log "Initializing config files"
@@ -509,8 +538,6 @@ create_cfg() {
 # This settings results in: $0 --mode backup --dry-run
 MODE=backup
 DRY_RUN=true
-
-RSYNC_OPTS="-avihH --numeric-ids --delete --stats --info=progress2"
 EOF
       ;;
     machine)
@@ -529,7 +556,6 @@ DEST_BASE="/mnt/tank/backups"
 
 USE_USB=false
 USB_ID=""
-USB_MOUNT="/mnt/usb"
 EOF
       ;;
     host)
@@ -633,7 +659,8 @@ EOF
 START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
 parse_cli_args "$@"
-log "Script started: mode=${MODE}, service=${SERVICE}" # todo show given args
+log "Script started: mode=${MODE}, service=${SERVICE}"
+vlog "Script started: mode=${MODE}, service=${SERVICE}" # todo show all given args
 CT_NAME=""
 if [[ -n "${SERVICE:-}" ]]; then
   CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
@@ -647,12 +674,14 @@ if $INIT_CONFIG; then
   exit 0
 fi
 
-# ab hier: normaler Betrieb -> SERVICE zwingend
+load_config_chain
+vlog "mode=${MODE}, service=${SERVICE}" # todo: after read config, show all feeded variables
+
+# ab hier: normaler Betrieb, SERVICE zwingend
 if [[ -z "${SERVICE:-}" ]]; then
   error "SERVICE not set"
 fi
 
-load_config_chain
 prepare
 db_open_run
 
@@ -669,10 +698,12 @@ case "$MODE" in
         take_snapshot
         backup_blockchain
         $VERIFY && verify_backup || EXIT_CODE=$?
+        $VERBOSE && list_snapshots
         ;;
     merge)
         merge_dirs
         $VERIFY && verify_backup || EXIT_CODE=$?
+        $VERBOSE && list_snapshots
         ;;
     verify)
         verify_backup || EXIT_CODE=$?
@@ -681,11 +712,10 @@ case "$MODE" in
         $FORCE || error "Restore requires --force"
         restore_blockchain
         $VERIFY && verify_backup || EXIT_CODE=$?
-        ;;
-    *)
-        error "Unknown MODE: $MODE"
+        list_snapshots
         ;;
 esac
+
 
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
@@ -697,3 +727,8 @@ collect_metrics "$RUNTIME" "$EXIT_CODE"
 log "Script finished successfully"
 exit "$EXIT_CODE"
 
+# ----------------------------------------------------------
+
+Automount minimal:
+mount | grep "$USB_MOUNT"
+mount "$USB_ID" "$USB_MOUNT"

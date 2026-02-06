@@ -1,0 +1,15 @@
+# --- machine.conf ---
+# Machine-wide settings
+
+MODE=backup
+DRY_RUN=false
+
+POOL="tank"
+DATASET="blockchain"
+
+SRC_BASE="/mnt/tank/blockchain"
+DEST_BASE="/mnt/tank/backups"
+
+USE_USB=false
+USB_ID=""
+USB_MOUNT="/mnt/usb"    # mountpoint

@@ -1,0 +1,7 @@
+# --- ${host}.conf ---
+# Host-specific config
+# Last in precedence chain
+
+# Example:
+# SERVICE="bitcoind"
+# LOGFILE="/var/log/backup_blockchain_truenas.log"
