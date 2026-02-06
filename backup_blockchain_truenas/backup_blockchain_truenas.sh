@@ -65,6 +65,9 @@ declare -A SERVICE_CT_MAP=(
 )
 TELEMETRY_ENABLED=false
 TELEMETRY_BACKEND=""    # influx
+METRIC_EXIT_CODE=""
+METRIC_RUNTIME=""
+METRIC_BLOCK_HEIGHT=""  # Blockheight
 
 # Runtime flags:
 # These MUST NOT be set via config files.
@@ -458,7 +461,7 @@ runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_H
 
 
 telemetry_syslog() {
-    logger -t backup_blockchain \
+    /usr/bin/logger -t backup_blockchain \
       "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
 snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
 }
