@@ -75,6 +75,7 @@ SERVICE_RUNNING=""
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
 SERVICE_GETDATA=true
+CLI_OVERRIDES=()
 
 # Runtime flags:
 # These MUST NOT be set via config files.
@@ -816,8 +817,55 @@ parse_cli_args() {
     esac
   done
 
-# Handle non-option arguments
-log "Non-option arguments: $*"
+# Handle non-option arguments (VAR=VALUE overrides only)
+  CLI_OVERRIDES=()
+  if [[ $# -gt 0 ]]; then
+    local arg
+    for arg in "$@"; do
+      if [[ "$arg" == *=* ]]; then
+        CLI_OVERRIDES+=("$arg")
+      else
+        error "Unknown argument: $arg"
+      fi
+    done
+  fi
+}
+
+apply_cli_overrides() {
+  local override key value
+  local -a allowed_vars=(
+    DATASET
+    DEST_BASE
+    DRY_RUN
+    FORCE
+    INIT_CONFIG
+    LOGFILE
+    METRICS_BLOCKHEIGHT
+    POOL
+    SERVICE_GETDATA
+    SERVICE_RUNNING
+    SERVICE_START_AFTER
+    SERVICE_STOP_BEFORE
+    SRC_BASE
+    STATEFILE
+    TELEMETRY_BACKEND
+    TELEMETRY_ENABLED
+    VERBOSE
+    VERIFY
+  )
+
+  for override in "${CLI_OVERRIDES[@]}"; do
+    key="${override%%=*}"
+    value="${override#*=}"
+    case " ${allowed_vars[*]} " in
+      *" ${key} "*)
+        declare -g "${key}=${value}"
+        ;;
+      *)
+        error "Unknown override variable: ${key}"
+        ;;
+    esac
+  done
 }
 
 resolve_paths() {
@@ -880,6 +928,11 @@ Options:
   -f,--force        Required for restore
   --init-config     Init new config files
   --help
+
+Overrides (VAR=VALUE, after options):
+  DATASET DEST_BASE DRY_RUN FORCE INIT_CONFIG LOGFILE METRICS_BLOCKHEIGHT POOL
+  SERVICE_GETDATA SERVICE_RUNNING SERVICE_START_AFTER SERVICE_STOP_BEFORE SRC_BASE
+  STATEFILE TELEMETRY_BACKEND TELEMETRY_ENABLED VERBOSE VERIFY
 EOF
 }
 
@@ -915,6 +968,7 @@ fi
 if [[ -n "${CLI_SERVICE:-}" ]]; then
   SERVICE="$CLI_SERVICE"
 fi
+apply_cli_overrides
 
 resolve_home_paths
 
