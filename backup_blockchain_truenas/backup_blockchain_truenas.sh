@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.7
+# Gold Release v1.0.8
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS
@@ -80,7 +80,7 @@ DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
 SERVICE_STOP_BEFORE=true
-SERVICE_START_AFTER=true
+SERVICE_START_AFTER=false
 
 ########################################
 # Logging helpers
@@ -266,28 +266,28 @@ list_snapshots_table() {
     local top mid bottom
     local entries
 
-    hr_type=$(printf '%*s' $((w_type + 2)) '' | tr ' ' '─')
-    hr_snap=$(printf '%*s' $((w_snap + 2)) '' | tr ' ' '─')
-    hr_date=$(printf '%*s' $((w_date + 2)) '' | tr ' ' '─')
+    hr_type=$(printf '%*s' $((w_type + 2)) '' | tr ' ' '-')
+    hr_snap=$(printf '%*s' $((w_snap + 2)) '' | tr ' ' '-')
+    hr_date=$(printf '%*s' $((w_date + 2)) '' | tr ' ' '-')
 
-    top="┌${hr_type}┬${hr_snap}┬${hr_date}┐"
-    mid="├${hr_type}┼${hr_snap}┼${hr_date}┤"
-    bottom="└${hr_type}┴${hr_snap}┴${hr_date}┘"
+    top="+${hr_type}+${hr_snap}+${hr_date}+"
+    mid="$top"
+    bottom="$top"
 
     entries=$(list_snapshots_entries)
 
     printf '%s\n' "$top"
-    printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "TYPE" "$w_snap" "SNAPSHOT" "$w_date" "CREATED"
+    printf "| %-*s | %-*s | %-*s |\n" "$w_type" "TYPE" "$w_snap" "SNAPSHOT" "$w_date" "CREATED"
     printf '%s\n' "$mid"
 
     if [ -z "$entries" ]; then
-        printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "-" "$w_snap" "no snapshots found" "$w_date" "-"
+        printf "| %-*s | %-*s | %-*s |\n" "$w_type" "-" "$w_snap" "no snapshots found" "$w_date" "-"
     else
         while IFS='|' read -r type snap created; do
             type=${type:0:$w_type}
             snap=${snap:0:$w_snap}
             created=${created:0:$w_date}
-            printf "│ %-*s │ %-*s │ %-*s │\n" "$w_type" "$type" "$w_snap" "$snap" "$w_date" "$created"
+            printf "| %-*s | %-*s | %-*s |\n" "$w_type" "$type" "$w_snap" "$snap" "$w_date" "$created"
         done <<<"$entries"
     fi
 
@@ -489,9 +489,14 @@ collect_metrics() {
     METRIC_BLOCK_HEIGHT=""
     if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
         METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
+        if [[ -z "$METRIC_BLOCK_HEIGHT" ]]; then
+            METRIC_BLOCK_HEIGHT="0"
+        fi
     fi
 
-    [[ -n "$METRIC_BLOCK_HEIGHT" ]] && state_set block_height "$METRIC_BLOCK_HEIGHT"
+    if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
+        state_set block_height "$METRIC_BLOCK_HEIGHT"
+    fi
     state_set snapshot_count "$METRIC_SNAPSHOT_COUNT"
     state_set last_run_service "$METRIC_SERVICE"
     state_set last_run_mode "$METRIC_MODE"
@@ -727,7 +732,7 @@ log "Non-option arguments: $*"
 }
 
 resolve_paths() {
-  local src_base dest_base
+  local src_base dest_base src_root dest_root svc
 
   [ -n "$POOL" ]    || error "POOL not set"
   [ -n "$DATASET" ] || error "DATASET not set"
@@ -736,20 +741,39 @@ resolve_paths() {
   src_base="${SRC_BASE:-/mnt/${POOL}/${DATASET}}"
   dest_base="${DEST_BASE:-/mnt/tank/backups/${DATASET}}"
 
-  if [[ "$src_base" == *"/${SERVICE}" ]]; then
-    SRCDIR="$src_base"
-  else
-    SRCDIR="${src_base%/}/${SERVICE}"
-  fi
+  src_root="${src_base%/}"
+  dest_root="${dest_base%/}"
+  for svc in "${!SERVICE_CT_MAP[@]}"; do
+    if [[ "$src_root" == *"/${svc}" ]]; then
+      src_root="${src_root%/${svc}}"
+      break
+    fi
+  done
 
-  if [[ "$dest_base" == *"/${SERVICE}" ]]; then
-    DESTDIR="$dest_base"
-  else
-    DESTDIR="${dest_base%/}/${SERVICE}"
-  fi
+  for svc in "${!SERVICE_CT_MAP[@]}"; do
+    if [[ "$dest_root" == *"/${svc}" ]]; then
+      dest_root="${dest_root%/${svc}}"
+      break
+    fi
+  done
 
-  SRC_BASE="$src_base"
-  DEST_BASE="$dest_base"
+  SRCDIR="${src_root%/}/${SERVICE}"
+  DESTDIR="${dest_root%/}/${SERVICE}"
+
+  SRC_BASE="$src_root"
+  DEST_BASE="$dest_root"
+}
+
+resolve_home_paths() {
+  local effective_user effective_home
+
+  effective_user="${SUDO_USER:-$USER}"
+  effective_home="$(getent passwd "$effective_user" | cut -d: -f6)"
+
+  if [[ -n "$effective_home" && "${HOME:-}" = "/root" && -n "${SUDO_USER:-}" ]]; then
+    LOGFILE="${LOGFILE/#\/root/$effective_home}"
+    STATEFILE="${STATEFILE/#\/root/$effective_home}"
+  fi
 }
 
 usage() {
@@ -799,6 +823,8 @@ fi
 if [[ -n "${CLI_SERVICE:-}" ]]; then
   SERVICE="$CLI_SERVICE"
 fi
+
+resolve_home_paths
 
 # ab hier: normaler Betrieb, SERVICE zwingend
 if [[ -z "${SERVICE:-}" ]]; then
