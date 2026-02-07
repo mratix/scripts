@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.0
+# Gold Release v1.1.1
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS
@@ -80,6 +80,7 @@ VERBOSE="${VERBOSE:-false}"
 DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
+SERVICE_RUNNING=true
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
 GET_DATA=true
@@ -416,16 +417,24 @@ service_stop() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    info "Stopping service container: $ct"
-    docker stop "$ct" >/dev/null 2>&1 || warn "Failed to stop $ct"
+    log "Stopping service container: $ct"
+    if docker stop "$ct" >/dev/null 2>&1; then
+        SERVICE_RUNNING=false
+    else
+        warn "Failed to stop $ct"
+    fi
 }
 
 service_start() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    info "Starting service container: $ct"
-    docker start "$ct" >/dev/null 2>&1 || warn "Failed to start $ct"
+    log "Starting service container: $ct"
+    if docker start "$ct" >/dev/null 2>&1; then
+        SERVICE_RUNNING=true
+    else
+        warn "Failed to start $ct"
+    fi
 }
 
 docker_exec() {
