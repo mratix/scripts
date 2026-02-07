@@ -5,7 +5,7 @@
 # Gold Release v1.1.1
 # Maintenance release: config handling, init-config fixes, stability
 #
-# Backup & restore script for blockchain nodes on TrueNAS
+# Backup & restore script for blockchain nodes on TrueNAS Scale
 #
 # Supported services:
 #   - bitcoind
@@ -58,8 +58,8 @@ RSYNC_EXCLUDES=(
   --exclude=.zfs/*
   --exclude=.snapshot
 )
-LOGFILE="${LOGFILE:-/var/log/backup_blockchain_truenas.log}"
-STATEFILE="${STATEFILE:-/var/log/backup_blockchain_truenas.state}"
+LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
+STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
@@ -70,6 +70,10 @@ TELEMETRY_BACKEND=""    # influx
 METRIC_EXIT_CODE=""
 METRIC_RUNTIME=""
 METRIC_BLOCK_HEIGHT=""  # Blockheight
+SERVICE_RUNNING=""
+SERVICE_STOP_BEFORE=true
+SERVICE_START_AFTER=false
+SERVICE_GETDATA=true
 
 # Runtime flags:
 # These MUST NOT be set via config files.
@@ -80,10 +84,6 @@ VERBOSE="${VERBOSE:-false}"
 DEBUG=false
 DRY_RUN=false
 INIT_CONFIG=false
-SERVICE_RUNNING=true
-SERVICE_STOP_BEFORE=true
-SERVICE_START_AFTER=false
-GET_DATA=true
 
 ########################################
 # Logging helpers
@@ -111,7 +111,7 @@ error() {
 # Statefile helpers (minimal audit trail)
 ########################################
 
-state_set() {
+write_statefile() {
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
   if [ -f "$STATEFILE" ]; then
@@ -312,8 +312,8 @@ list_snapshots() {
 # Restore (interactive, never headless)
 ########################################
 
-backup_blockchain() {
-    vlog "backup_blockchain__ start"
+backup_restore_blockchain() {
+    vlog "backup_restore_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
         log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
@@ -348,7 +348,7 @@ case "$rsync_exit" in
         ;;
     esac
 
-    vlog "backup_blockchain__ done"
+    vlog "backup_restore_blockchain__ done"
 }
 
 ########################################
@@ -377,8 +377,8 @@ fi
 }
 
 
-verify_backup() {
-    vlog "verify_backup__ start"
+verify_backup_restore() {
+    vlog "verify_backup_restore__ start"
 
     [ -d "$SRCDIR" ]  || error "Source directory missing: $SRCDIR"
     [ -d "$DESTDIR" ] || error "Backup directory missing: $DESTDIR"
@@ -407,12 +407,14 @@ verify_backup() {
     if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
         state_set verify_status "partial"
         error "Verify found differences"
+        # insert here $VERBOSE: cat /tmp/verify-${SERVICE}.log + pause / :q
     fi
 
     state_set verify_status "success"
-    vlog "verify_backup__ done"
+    vlog "verify_backup_restore__ done"
 }
 
+# --- pre-tasks, stop service
 service_stop() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
@@ -425,6 +427,7 @@ service_stop() {
     fi
 }
 
+# --- post-tasks, start service
 service_start() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
@@ -558,7 +561,7 @@ runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_H
 
 
 telemetry_syslog() {
-    /usr/bin/logger -t backup_blockchain \
+    /usr/bin/logger -t backup_restore_blockchain \
       "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
 snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
 }
@@ -611,7 +614,7 @@ send_telemetry() {
 
 
 send_telemetry_syslog() {
-logger -t backup_blockchain \
+logger -t backup_restore_blockchain \
   "service=$SERVICE mode=$MODE exit=$EXIT_CODE runtime=${RUNTIME}s snapshot=${LAST_SNAPSHOT:-}"
 }
 
@@ -702,7 +705,7 @@ EOF
 
 # Example:
 SERVICE="bitcoind"
-LOGFILE="/var/log/backup_blockchain_truenas.log"
+LOGFILE="/var/log/backup_restore_blockchain_truenas.log"
 EOF
       ;;
     *)
@@ -737,12 +740,12 @@ parse_cli_args() {
         shift 2
         ;;
       -g|--getdata)
-        GET_DATA=true
+        SERVICE_GETDATA=true
         shift
         ;;
       --verbose)
         VERBOSE=true
-        GET_DATA=true
+        SERVICE_GETDATA=true
         shift
         ;;
       --debug)
@@ -885,7 +888,7 @@ fi
 resolve_paths
 prepare
 
-if [[ -n "${GET_DATA:-}" ]]; then
+if [[ -n "${SERVICE_GETDATA:-}" ]]; then
   get_service_data
 fi
 
@@ -900,22 +903,24 @@ fi
 EXIT_CODE=0
 case "$MODE" in
     backup)
-        $SERVICE_STOP_BEFORE && service_stop
         take_snapshot
-        backup_blockchain
+        $SERVICE_STOP_BEFORE && service_stop
+        #rotate_logfile
+        backup_restore_blockchain
+        $VERIFY && verify_backup_restore || EXIT_CODE=$?
         $SERVICE_START_AFTER && service_start
-        $VERIFY && verify_backup || EXIT_CODE=$?
         $VERBOSE && list_snapshots
         ;;
     merge)
-        $SERVICE_STOP_BEFORE && service_stop
+        service_stop
         merge_dirs
-        $VERIFY && verify_backup || EXIT_CODE=$?
-        $VERBOSE && list_snapshots
+        $VERIFY && verify_backup_restore || EXIT_CODE=$?
         #$SERVICE_START_AFTER && service_start
+        $VERBOSE && list_snapshots
         ;;
     verify)
-        verify_backup || EXIT_CODE=$?
+        verify_backup_restore || EXIT_CODE=$?
+        $VERBOSE && list_snapshots
         ;;
     restore)
         $FORCE || error "Restore requires --force"
@@ -926,11 +931,11 @@ case "$MODE" in
         else
             error "Restore requires interactive terminal"
         fi
-        $SERVICE_STOP_BEFORE && service_stop
+        service_stop
         restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
-        backup_blockchain
+        backup_restore_blockchain
         restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
-        $VERIFY && verify_backup || EXIT_CODE=$?
+        $VERIFY && verify_backup_restore || EXIT_CODE=$?
         ;;
 esac
 # --- execute part done ---
