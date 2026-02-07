@@ -450,7 +450,8 @@ get_block_height() {
         monerod)
             #docker exec "$ct" monerod status 2>/dev/null | awk '/Height:/ {print $2}'
             #3384305/3604686
-            docker exec "$ct" monerod print_height 2>/dev/null | awk 'END {print $1}'
+            #docker exec "$ct" monerod print_height 2>/dev/null | awk 'END {print $1}' # wert ans ende geh#ngt
+            docker exec "$ct" monerod print_height 2>/dev/null | tail -n1
             #docker exec "$ct" monero-wallet-cli bc_height # unused
             ;;
         chia)
@@ -464,16 +465,19 @@ get_block_height() {
 
 # --- pull data from service, little node-info
 get_service_data() {
+    # if [[ "$GET_DATA" == true ]]; then ...
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
 
     case "$SERVICE" in
         bitcoind)
-            docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null 1> info
+            docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
+                | while IFS= read -r line; do info "$line"; done
             ;;
         monerod)
-            docker exec "$ct" monerod status 2>/dev/null 1> info
+            docker exec "$ct" monerod status 2>/dev/null \
+                | while IFS= read -r line; do info "$line"; done
             ;;
         chia)
             ;;
