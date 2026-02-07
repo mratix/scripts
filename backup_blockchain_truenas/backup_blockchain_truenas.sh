@@ -472,9 +472,9 @@ get_block_height() {
     esac
 }
 
-# --- pull data from service, little node-info
+# --- grab data from service, little node-info
 get_service_data() {
-    # if [[ "$GET_DATA" == true ]]; then ...
+  if [[ "$SERVICE_RUNNING" == true ]]; then
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
@@ -495,7 +495,7 @@ get_service_data() {
             return 1
             ;;
     esac
-    show ""
+  fi
 }
 
 
