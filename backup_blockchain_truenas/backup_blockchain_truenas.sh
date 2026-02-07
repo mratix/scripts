@@ -89,11 +89,11 @@ GET_DATA=true
 # Logging helpers
 ########################################
 
+show() {
+    echo "$*"
+}
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"
-}
-info() {
-    echo "$*"
 }
 vlog() {
     $VERBOSE || return 0
@@ -320,7 +320,7 @@ backup_blockchain() {
         return 0
     fi
 
-    info "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
+    show "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
     if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
         rsync_exit=$?
     else
@@ -479,14 +479,15 @@ get_service_data() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
 
+    show "Short Service summary:"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
-                | while IFS= read -r line; do info "$line"; done
+                | while IFS= read -r line; do show "$line"; done
             ;;
         monerod)
             docker exec "$ct" monerod status 2>/dev/null \
-                | while IFS= read -r line; do info "$line"; done
+                | while IFS= read -r line; do show "$line"; done
             ;;
         chia)
             ;;
@@ -494,6 +495,7 @@ get_service_data() {
             return 1
             ;;
     esac
+    show ""
 }
 
 
@@ -519,6 +521,7 @@ collect_metrics() {
     METRIC_BLOCK_HEIGHT=""
     if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
         METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
+        vlog "Parsed Blockheight: "$METRIC_BLOCK_HEIGHT
         if [[ -z "$METRIC_BLOCK_HEIGHT" ]]; then
             METRIC_BLOCK_HEIGHT="0"
         fi
@@ -646,7 +649,7 @@ create_cfg() {
   local type="$2"
 
   if [[ -f "$file" ]]; then
-    info "Config already exists, skipping: $file"
+    show "Config already exists, skipping: $file"
     return
   fi
 
@@ -843,17 +846,18 @@ EOF
 # Main
 ########################################
 
+$DEBUG && set -x # enable debug
+
 START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
+show "Script started"
+
+vlog "Start settings: $@" # all given args
 parse_cli_args "$@"
-info "Script started: mode=${MODE}, service=${SERVICE}"
-vlog "Script started: mode=${MODE}, service=${SERVICE}" # todo show all given args
 CT_NAME=""
 if [[ -n "${SERVICE:-}" ]]; then
   CT_NAME="${SERVICE_CT_MAP[$SERVICE]:-}"
 fi
-
-$DEBUG && set -x
 
 # init-config called, SERVICE not needed
 if $INIT_CONFIG; then
@@ -862,7 +866,7 @@ if $INIT_CONFIG; then
 fi
 
 load_config_chain
-vlog "mode=${MODE}, service=${SERVICE}" # todo: after read config, show all feeded variables
+vlog "Using settings: mode=${MODE}, service=${SERVICE}" # todo: after read config, show all feeded variables
 
 if [[ -n "${CLI_MODE:-}" ]]; then
   MODE="$CLI_MODE"
