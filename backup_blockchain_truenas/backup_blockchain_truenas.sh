@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.1
+# Gold Release v1.1.2
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS Scale
@@ -454,6 +454,7 @@ get_block_height() {
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
+    command -v docker >/dev/null 2>&1 || return
 
     case "$SERVICE" in
         bitcoind)
@@ -475,8 +476,32 @@ get_block_height() {
     esac
 }
 
+check_service_running() {
+    local ct
+    ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    if [[ -z "$ct" ]]; then
+        SERVICE_RUNNING=false
+        return 1
+    fi
+
+    if ! command -v docker >/dev/null 2>&1; then
+        warn "docker binary not available; assuming service is not running"
+        SERVICE_RUNNING=false
+        return 1
+    fi
+
+    if docker ps -q -f "name=^${ct}$" | grep -q .; then
+        SERVICE_RUNNING=true
+        return 0
+    fi
+
+    SERVICE_RUNNING=false
+    return 1
+}
+
 # --- grab data from service, little node-info
 get_service_data() {
+  check_service_running || return 0
   if [[ "$SERVICE_RUNNING" == true ]]; then
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
@@ -514,17 +539,26 @@ collect_metrics() {
     METRIC_DST_SIZE="$(du -sb "$DESTDIR" 2>/dev/null | awk '{print $1}' || echo 0)"
     METRIC_DISKUSAGE="$(du -shL "$SRCDIR" 2>/dev/null | awk '{print $1}' || echo 0)"
 
-    METRIC_SNAPSHOT_COUNT="$(zfs list -t snapshot -o name 2>/dev/null \
-        | grep "^${POOL}/${DATASET}/${SERVICE}@" \
-        | wc -l || echo 0)"
+    METRIC_SNAPSHOT_COUNT="0"
+    if command -v zfs >/dev/null 2>&1; then
+        METRIC_SNAPSHOT_COUNT="$(zfs list -t snapshot -o name 2>/dev/null \
+            | grep "^${POOL}/${DATASET}/${SERVICE}@" \
+            | wc -l || echo 0)"
+    else
+        warn "zfs binary not available; snapshot metrics defaulting to 0"
+    fi
 
     METRIC_SERVICE="$SERVICE"
     METRIC_MODE="$MODE"
 
     METRIC_BLOCK_HEIGHT=""
     if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
-        METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
-        vlog "Parsed Blockheight: "$METRIC_BLOCK_HEIGHT
+        if check_service_running; then
+            METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
+        else
+            METRIC_BLOCK_HEIGHT="0"
+        fi
+        vlog "Parsed Blockheight: $METRIC_BLOCK_HEIGHT"
         if [[ -z "$METRIC_BLOCK_HEIGHT" ]]; then
             METRIC_BLOCK_HEIGHT="0"
         fi
