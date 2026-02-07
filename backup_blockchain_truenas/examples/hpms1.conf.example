@@ -2,8 +2,7 @@
 # letzter Override für backup_blockchain_truenas.sh
 # In *.conf *NIE* RSYNC_OPTS setzen. Überschreibt Array -> crash
 
-# hpms1.conf
-enabled=true
+ENABLED=true
 
 THIS_HOST="hpms1"
 ROLE="validator"

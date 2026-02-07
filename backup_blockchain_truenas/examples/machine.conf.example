@@ -1,6 +1,8 @@
 # --- machine.conf ---
 # Machine-wide settings
 
+ENABLED=true
+
 MODE=backup
 DRY_RUN=false
 
