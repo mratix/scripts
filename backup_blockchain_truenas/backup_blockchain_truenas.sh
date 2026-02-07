@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.9
+# Gold Release v1.1.0
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS
@@ -90,7 +90,7 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"
 }
 info() {
-    log "Info: $*"
+    echo "$*"
 }
 vlog() {
     $VERBOSE || return 0
@@ -103,7 +103,6 @@ error() {
     log "ERROR: $*"
     exit 1
 }
-
 
 ########################################
 # Statefile helpers (minimal audit trail)
@@ -304,9 +303,9 @@ list_snapshots() {
     fi
 }
 
-
 ########################################
-# Backup (rsync-based)
+# Backup (rsync-based, snapshot protected)
+# Restore (interactive, never headless)
 ########################################
 
 backup_blockchain() {
@@ -317,21 +316,33 @@ backup_blockchain() {
         return 0
     fi
 
-    log "Starting rsync from ${SRCDIR}/ to ${DESTDIR}/"
-    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"
-rsync_exit=$?
+    info "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
+    if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
+        rsync_exit=$?
+    else
+        rsync_exit=0
+    fi
 
 case "$rsync_exit" in
-  0)
-    log "rsync completed successfully"
-    ;;
-23|24)
-    warn "rsync completed with warnings code=$rsync_exit"
-    ;;
-*)
-    error "rsync failed code=$rsync_exit"
-    ;;
-esac
+      0)
+        log "rsync ${MODE} completed successfully"
+        ;;
+      23|24)
+        warn "rsync ${MODE} completed with warnings code=$rsync_exit; retrying once"
+        if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
+            rsync_exit=$?
+        else
+            rsync_exit=0
+        fi
+        if [[ "$rsync_exit" -ne 0 ]]; then
+            error "rsync ${MODE} failed after retry code=$rsync_exit"
+        fi
+        log "rsync ${MODE} completed successfully after retry"
+        ;;
+      *)
+        error "rsync failed code=$rsync_exit"
+        ;;
+    esac
 
     vlog "backup_blockchain__ done"
 }
@@ -366,8 +377,8 @@ verify_backup() {
     log "Verifying structure and size"
 
     local src_size dst_size
-    src_size="$(du -sb $SRCDIR  | awk '{print $1}')"
-    dst_size="$(du -sb $DESTDIR | awk '{print $1}')"
+    src_size="$(du -sb "$SRCDIR"  | awk '{print $1}')"
+    dst_size="$(du -sb "$DESTDIR" | awk '{print $1}')"
 
     log "Source size: $src_size bytes"
     log "Backup size: $dst_size bytes"
@@ -385,9 +396,8 @@ verify_backup() {
         >"/tmp/verify-${SERVICE}.log"
 
     if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
-        warn "Verify found differences"
         state_set verify_status "partial"
-        return 10
+        error "Verify found differences"
     fi
 
     state_set verify_status "success"
@@ -398,7 +408,7 @@ service_stop() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    log "Stopping service container: $ct"
+    info "Stopping service container: $ct"
     docker stop "$ct" >/dev/null 2>&1 || warn "Failed to stop $ct"
 }
 
@@ -406,7 +416,7 @@ service_start() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    log "Starting service container: $ct"
+    info "Starting service container: $ct"
     docker start "$ct" >/dev/null 2>&1 || warn "Failed to start $ct"
 }
 
@@ -592,7 +602,7 @@ create_cfg() {
   local type="$2"
 
   if [[ -f "$file" ]]; then
-    warn "Config already exists, skipping: $file"
+    info "Config already exists, skipping: $file"
     return
   fi
 
@@ -646,9 +656,9 @@ EOF
 
 parse_cli_args() {
   local OPTIONS
-  OPTIONS=$(getopt -o '' \
-    --long mode:,service:,verbose,debug,dry-run,force,init-config,help \
-    -- "$@") || exit 1
+  OPTIONS=$(getopt -o 'm:s:tf' \
+  --long mode:,service:,verbose,debug,dry-run,force,init-config,help \
+  -- "$@") || exit 1
 
   # if getopt returned an error
   if [ $? -ne 0 ]; then
@@ -775,7 +785,7 @@ EOF
 START_TS=$(date +%s)
 THIS_HOST=${THIS_HOST:-$(hostname -s)}
 parse_cli_args "$@"
-log "Script started: mode=${MODE}, service=${SERVICE}"
+info "Script started: mode=${MODE}, service=${SERVICE}"
 vlog "Script started: mode=${MODE}, service=${SERVICE}" # todo show all given args
 CT_NAME=""
 if [[ -n "${SERVICE:-}" ]]; then
