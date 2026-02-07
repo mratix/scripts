@@ -140,6 +140,11 @@ load_config() {
         if [[ -f "$cfg" ]]; then
             log "Loading config: $cfg"
 
+            if ! grep -Eq '^[[:space:]]*ENABLED[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$cfg"; then
+                vlog "Config file not enabled, skipping: $cfg"
+                continue
+            fi
+
             if ! bash -n "$cfg" 2>/dev/null; then
                 warn "Syntax error in config file, skipping: $cfg"
                 continue
@@ -352,14 +357,18 @@ case "$rsync_exit" in
 ########################################
 
 merge_dirs() {
-    vlog "merge_dirs__ start"
+vlog "merge_dirs__ start"
 
-    #take_snapshot  # take snapshot of destination-dataset, not the source
+# take snapshot destination-dataset, not source
+local saved_pool="$POOL"
+POOL="tank"
+take_snapshot
+POOL="$saved_pool"
 
-    if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
-        return 0
-    fi
+if [ "$DRY_RUN" = true ]; then
+    log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
+    return 0
+fi
 
     rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/" \
         || error "Merge rsync failed"
@@ -367,6 +376,7 @@ merge_dirs() {
     log "Merge completed successfully"
     telemetry_event "info" "merge completed" "script"
 }
+
 
 verify_backup() {
     vlog "verify_backup__ start"
@@ -614,6 +624,8 @@ create_cfg() {
 # --- default.conf ---
 # Lowest priority config
 
+ENABLED=true
+
 # This settings results in: $0 --mode backup --dry-run
 MODE=backup
 DRY_RUN=true
@@ -623,6 +635,8 @@ EOF
       cat >"$file" <<'EOF'
 # --- machine.conf ---
 # Machine-wide settings
+
+ENABLED=true
 
 MODE=backup
 DRY_RUN=false
@@ -635,6 +649,12 @@ DEST_BASE="/mnt/tank/backups"
 
 USE_USB=false
 USB_ID=""
+
+VERIFY=true # enable always verify
+VERBOSE=false # enable verbose outputs
+
+TELEMETRY_ENABLED=true
+TELEMETRY_BACKEND="syslog"    # none|syslog|http|influx
 EOF
       ;;
     host)
@@ -818,7 +838,6 @@ if [[ -z "${SERVICE:-}" ]]; then
 fi
 
 resolve_paths
-
 prepare
 
 if $USE_USB; then
@@ -828,7 +847,7 @@ if $USE_USB; then
 fi
 
 
-# --- execute part
+# --- execute part ---
 EXIT_CODE=0
 case "$MODE" in
     backup)
@@ -870,7 +889,7 @@ esac
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 
-# telemetry
+# --- telemetry
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 collect_metrics "$RUNTIME" "$EXIT_CODE"
