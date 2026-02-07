@@ -31,7 +31,7 @@
 #   - minimal persistent state
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
-# Refactor & extensions: ChatGPT <- With best thanks to
+# Refactor & extensions: ChatGPT codex <- With best thanks for the support
 # ============================================================
 #
 
@@ -54,9 +54,10 @@ CLI_MODE=""
 
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
-  --exclude=.zfs
-  --exclude=.zfs/*
-  --exclude=.snapshot
+  --exclude='/.zfs'
+  --exclude='/.zfs/**'
+  --exclude='/.snapshot'
+  --exclude='/.snapshot/**'
 )
 LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
 STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
@@ -406,8 +407,11 @@ verify_backup_restore() {
 
     if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
         state_set verify_status "partial"
+        if $VERBOSE; then
+            log "Verify diffs detected:"
+            sed 's/^/  /' "/tmp/verify-${SERVICE}.log" | tee -a "$LOGFILE"
+        fi
         error "Verify found differences"
-        # insert here $VERBOSE: cat /tmp/verify-${SERVICE}.log + pause / :q
     fi
 
     state_set verify_status "success"
