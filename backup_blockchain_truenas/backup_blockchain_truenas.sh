@@ -15,6 +15,7 @@
 # Supported long flags:
 #   --mode:     backup|merge|verify|restore
 #   --service:  bitcoind|monerod|chia
+#   --getdata
 #   --verbose
 #   --debug
 #   --dry-run
@@ -29,7 +30,7 @@
 #   - rsync as fallback (merge,verify tool)
 #   - minimal persistent state
 #
-# Author: mratix
+# Author: mratix, 1644259+mratix@users.noreply.github.com
 # Refactor & extensions: ChatGPT <- With best thanks to
 # ============================================================
 #
@@ -81,6 +82,7 @@ DRY_RUN=false
 INIT_CONFIG=false
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
+GET_DATA=true
 
 ########################################
 # Logging helpers
@@ -124,10 +126,6 @@ state_set() {
 ########################################
 # Config handling
 ########################################
-
-# Usage:
-#   load_config machine.conf|your_config.conf
-#
 # Rules:
 # - Later files override earlier ones
 # - CLI / environment variables override config
@@ -450,11 +448,34 @@ get_block_height() {
             docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
             ;;
         monerod)
-            docker exec "$ct" monerod status 2>/dev/null \
-              | awk '/Height:/ {print $2}'
+            #docker exec "$ct" monerod status 2>/dev/null | awk '/Height:/ {print $2}'
+            #3384305/3604686
+            docker exec "$ct" monerod print_height 2>/dev/null | awk 'END {print $1}'
+            #docker exec "$ct" monero-wallet-cli bc_height # unused
             ;;
         chia)
             docker exec "$ct" chia blockchain height 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# --- pull data from service, little node-info
+get_service_data() {
+    local ct
+    ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
+    [[ -n "$ct" ]] || return 1
+
+    case "$SERVICE" in
+        bitcoind)
+            docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null 1> info
+            ;;
+        monerod)
+            docker exec "$ct" monerod status 2>/dev/null 1> info
+            ;;
+        chia)
             ;;
         *)
             return 1
@@ -676,8 +697,8 @@ EOF
 
 parse_cli_args() {
   local OPTIONS
-  OPTIONS=$(getopt -o 'm:s:tf' \
-  --long mode:,service:,verbose,debug,dry-run,force,init-config,help \
+  OPTIONS=$(getopt -o 'm:s:gtf' \
+  --long mode:,service:,getdata,verbose,debug,dry-run,force,init-config,help \
   -- "$@") || exit 1
 
   # if getopt returned an error
@@ -699,8 +720,13 @@ parse_cli_args() {
         CLI_SERVICE="$2"
         shift 2
         ;;
+      -g|--getdata)
+        GET_DATA=true
+        shift
+        ;;
       --verbose)
         VERBOSE=true
+        GET_DATA=true
         shift
         ;;
       --debug)
@@ -784,16 +810,18 @@ resolve_home_paths() {
 
 usage() {
   cat <<EOF
-Usage: $0 [options]
+Usage: $0 [options] <command> [params]
 
 Options:
-  --mode         <backup|merge|verify|restore>
-  --service      <bitcoind|monerod|chia>
-  --verbose      Verbose outputs and logging
-  --debug        Enable bash xtrace
-  --dry-run      Do not modify anything
-  --force        Required for restore
-  --init-config  Init new config files
+  -m,--mode         <backup|merge|verify|restore>
+  -s,--service      <bitcoind|monerod|chia>
+
+  -g,--getdata      Pull data from service
+  --verbose         Verbose outputs and logging
+  --debug           Enable bash xtrace
+  -t,--dry-run      Do not modify anything
+  -f,--force        Required for restore
+  --init-config     Init new config files
   --help
 EOF
 }
@@ -839,6 +867,10 @@ fi
 
 resolve_paths
 prepare
+
+if [[ -n "${GET_DATA:-}" ]]; then
+  get_service_data
+fi
 
 if $USE_USB; then
   [[ -b "$USB_ID" ]] && DESTDIR="$USB_MOUNT/$DATASET/$SERVICE" || error "USB device not found"
