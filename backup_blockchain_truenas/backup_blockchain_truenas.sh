@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.0.8
+# Gold Release v1.0.9
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS
@@ -334,30 +334,6 @@ case "$rsync_exit" in
 esac
 
     vlog "backup_blockchain__ done"
-}
-
-########################################
-# Restore (interactive, never headless)
-########################################
-
-restore_blockchain() {
-    [ "$FORCE" = true ] || error "Restore requires FORCE=true"
-
-    warn "RESTORE MODE – this will overwrite local data"
-if [ -t 0 ]; then
-    read -r -p "Type YES to continue: " confirm
-    [ "$confirm" = "YES" ] || error "Restore aborted by user"
-    service_stop
-
-    vlog "restore_blockchain__ start"
-    rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/" \
-        || error "Restore failed"
-
-    vlog "restore_blockchain__ done"
-    # service_start # never autostart after restore
-else
-    error "Restore requires interactive terminal"
-fi
 }
 
 ########################################
@@ -865,8 +841,17 @@ case "$MODE" in
         ;;
     restore)
         $FORCE || error "Restore requires --force"
+        warn "RESTORE MODE – this will overwrite local data"
+        if [ -t 0 ]; then
+            read -r -p "Type YES to continue: " confirm
+            [ "$confirm" = "YES" ] || error "Restore aborted by user"
+        else
+            error "Restore requires interactive terminal"
+        fi
         $SERVICE_STOP_BEFORE && service_stop
-        restore_blockchain
+        restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
+        backup_blockchain
+        restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
         $VERIFY && verify_backup || EXIT_CODE=$?
         ;;
 esac
