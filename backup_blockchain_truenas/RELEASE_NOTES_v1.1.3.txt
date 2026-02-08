@@ -1,0 +1,6 @@
+## v1.0.4 – Verification & Telemetry Release
+
+### Notes
+Hinweis (TrueNAS SCALE / Apps):
+    Die App-Container werden von k3s verwaltet. Ein docker stop beendet den Container zwar, wird aber vom App-Manager als „crash“ gewertet und kann in der GUI einen Crash-Status anzeigen. Dies ist i. d. R. nicht kritisch, aber unsauber. Dienste wie monerod reagieren darauf empfindlicher (längerer Re-Index, Warnungen).
+    Empfohlen: App über TrueNAS-Mechanismen stoppen oder den Dienst im Container sauber beenden.

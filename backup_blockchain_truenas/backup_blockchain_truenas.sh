@@ -508,6 +508,58 @@ service_stop_midclt() {
     fi
 }
 
+rotate_logfile() {
+    local service_logfile
+    local logfile_dir logfile_name logfile_base
+    local rotated_file
+    local suffix=""
+
+    if [[ "$MODE" != "backup" ]]; then
+        return 0
+    fi
+
+    if [[ "${METRICS_BLOCKHEIGHT:-false}" != true ]]; then
+        vlog "Log rotation skipped: METRICS_BLOCKHEIGHT disabled"
+        return 0
+    fi
+
+    case "$SERVICE" in
+        bitcoind) service_logfile="${SRCDIR}/debug.log" ;;
+        monerod) service_logfile="${SRCDIR}/bitmonero.log" ;;
+        chia) return 0 ;;
+        *) return 0 ;;
+    esac
+
+    if [[ ! -f "$service_logfile" ]]; then
+        vlog "Log rotation skipped: ${service_logfile} not found"
+        return 0
+    fi
+
+    check_service_running || true
+    if [[ "${SERVICE_RUNNING}" == true ]]; then
+        suffix="-unclean"
+    fi
+
+    METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
+    if [[ -z "${METRIC_BLOCK_HEIGHT}" || "${METRIC_BLOCK_HEIGHT}" -lt 111111 ]]; then
+        vlog "Log rotation skipped: block height not available or below threshold"
+        return 0
+    fi
+
+    logfile_dir="$(dirname "$service_logfile")"
+    logfile_name="$(basename "$service_logfile")"
+    logfile_base="${logfile_name%.*}"
+    rotated_file="${logfile_dir}/${logfile_base}_h${METRIC_BLOCK_HEIGHT}${suffix}.log"
+
+    if [[ "${SERVICE_RUNNING}" == true ]]; then
+        cp -u "$service_logfile" "$rotated_file" || warn "Failed to copy log to ${rotated_file}"
+    else
+        mv -u "$service_logfile" "$rotated_file" || warn "Failed to move log to ${rotated_file}"
+    fi
+
+    log "Rotated ${service_logfile} -> ${rotated_file}"
+}
+
 docker_exec() {
     local service="$1"
     shift
@@ -1062,7 +1114,7 @@ case "$MODE" in
     backup)
         take_snapshot
         $SERVICE_STOP_BEFORE && service_stop
-        #rotate_logfile
+        rotate_logfile
         backup_restore_blockchain
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
         $SERVICE_START_AFTER && service_start
