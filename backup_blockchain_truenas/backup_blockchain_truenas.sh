@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.2
+# Gold Release v1.1.3
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS Scale
@@ -66,6 +66,11 @@ declare -A SERVICE_CT_MAP=(
   [monerod]="ix-monerod-monerod-1"
   [chia]="ix-chia-farmer-1"
 )
+declare -A SERVICE_APP_MAP=(
+  [bitcoind]="bitcoind"
+  [monerod]="monerod"
+  [chia]="chia"
+)
 TELEMETRY_ENABLED=false
 TELEMETRY_BACKEND=""    # influx
 METRIC_EXIT_CODE=""
@@ -75,6 +80,7 @@ SERVICE_RUNNING=""
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
 SERVICE_GETDATA=true
+SERVICE_STOP_METHOD="docker" # docker|graceful|midclt
 CLI_OVERRIDES=()
 
 # Runtime flags:
@@ -421,15 +427,15 @@ verify_backup_restore() {
 
 # --- pre-tasks, stop service
 service_stop() {
-    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
-    [[ -n "$ct" ]] || return 0
-
-    log "Stopping service container: $ct"
-    if docker stop "$ct" >/dev/null 2>&1; then
-        SERVICE_RUNNING=false
-    else
-        warn "Failed to stop $ct"
-    fi
+    case "${SERVICE_STOP_METHOD}" in
+        docker) service_stop_docker ;;
+        graceful) service_stop_graceful ;;
+        midclt) service_stop_midclt ;;
+        *)
+            warn "Unknown SERVICE_STOP_METHOD=${SERVICE_STOP_METHOD}, falling back to docker"
+            service_stop_docker
+            ;;
+    esac
 }
 
 # --- post-tasks, start service
@@ -442,6 +448,63 @@ service_start() {
         SERVICE_RUNNING=true
     else
         warn "Failed to start $ct"
+    fi
+}
+
+service_stop_docker() {
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    log "Stopping service container: $ct"
+    if docker stop "$ct" >/dev/null 2>&1; then
+        SERVICE_RUNNING=false
+    else
+        warn "Failed to stop $ct"
+    fi
+}
+
+service_stop_graceful() {
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    if ! command -v docker >/dev/null 2>&1; then
+        warn "docker binary not available; falling back to docker stop"
+        service_stop_docker
+        return 0
+    fi
+
+    log "Attempting graceful stop inside container: $ct"
+    case "$SERVICE" in
+        bitcoind)
+            docker exec "$ct" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
+            ;;
+        monerod)
+            docker exec "$ct" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
+            ;;
+        chia)
+            docker exec "$ct" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
+            ;;
+        *)
+            warn "Graceful stop not defined for service=${SERVICE}"
+            ;;
+    esac
+
+    service_stop_docker
+}
+
+service_stop_midclt() {
+    local app_name="${SERVICE_APP_MAP[$SERVICE]:-$SERVICE}"
+
+    if ! command -v midclt >/dev/null 2>&1; then
+        warn "midclt binary not available; falling back to docker stop"
+        service_stop_docker
+        return 0
+    fi
+
+    log "Stopping TrueNAS app via midclt: ${app_name}"
+    if ! midclt call app.stop "${app_name}" >/dev/null 2>&1; then
+        warn "midclt app.stop failed for ${app_name}; falling back to docker stop"
+        service_stop_docker
     fi
 }
 
@@ -843,6 +906,7 @@ apply_cli_overrides() {
     METRICS_BLOCKHEIGHT
     POOL
     SERVICE_GETDATA
+    SERVICE_STOP_METHOD
     SERVICE_RUNNING
     SERVICE_START_AFTER
     SERVICE_STOP_BEFORE
@@ -931,8 +995,9 @@ Options:
 
 Overrides (VAR=VALUE, after options):
   DATASET DEST_BASE DRY_RUN FORCE INIT_CONFIG LOGFILE METRICS_BLOCKHEIGHT POOL
-  SERVICE_GETDATA SERVICE_RUNNING SERVICE_START_AFTER SERVICE_STOP_BEFORE SRC_BASE
-  STATEFILE TELEMETRY_BACKEND TELEMETRY_ENABLED VERBOSE VERIFY
+  SERVICE_GETDATA SERVICE_RUNNING SERVICE_START_AFTER SERVICE_STOP_BEFORE
+  SERVICE_STOP_METHOD SRC_BASE STATEFILE TELEMETRY_BACKEND TELEMETRY_ENABLED
+  VERBOSE VERIFY
 EOF
 }
 
