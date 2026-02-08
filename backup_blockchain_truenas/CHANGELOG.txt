@@ -1,3 +1,10 @@
+v1.1.4 – Documentation & Governance Release
+
+- docs: refresh README.md and README.short to reflect current release state
+- docs: update RELEASE_NOTES.md and add v1.1.4 release notes
+- docs: add community standards files (license, security, contributing, templates)
+- maintenance: minor wording updates for clarity and consistency
+
 v1.0.6 – Maintenance Release
 
 - fix: init-config no longer requires SERVICE and exits early

@@ -1,68 +1,34 @@
-Release Notes — v1.0.0 “Gold”
+Release Notes — v1.1.4 "Gold"
 Status
 
-Stable baseline release
+Stable documentation update
 
 Diese Version stellt einen stabilen, aufgeräumten Kern des Projekts dar.
 Sie dient als verlässliche Grundlage für zukünftige Erweiterungen.
 
-Neu
+Neu / Aktualisiert
 
-Klar definierter Backup / Restore / Merge-Workflow
-
-ZFS-first Ansatz:
-
-Snapshots vor kritischen Operationen
-
-Statefile (Audit-Trail):
-
-letzter Lauf
-
-Modus
-
-Runtime
-
-Disk Usage (du -shL)
-
-Restore mit Sicherheitsabfrage & FORCE-Flag
-
-Headless-fähig für Cronjobs (außer Restore)
-
-Deterministisches Verhalten (set -Eeuo pipefail)
-
-Entfernt / Bereinigt
-
-h*-Stamp-Konstrukt (Height-Marker)
-
-historisch gewachsene Sonderlogik
-
-implizite Seiteneffekte
-
-vermischte Zustände (Backup ≠ Restore ≠ Merge)
-
-Diese Logik ist nicht verloren, sondern verbleibt im alpha-Branch.
+- Dokumentation auf v1.1.4 aktualisiert (README, README.short, Release Notes)
+- Community Standards ergänzt (LICENSE, SECURITY, CONTRIBUTING, Templates)
+- Hinweise zu Support und Kontakt klar dargestellt
 
 Bekannte Einschränkungen
 
-Telemetrie nur vorbereitet (kein Export aktiv)
+Telemetrie Export für Influx vorbereitet
 
-Service-spezifische Sonderfälle (z. B. monerod rsync-Optimierung) noch nicht re-integriert
+Service-spezifische Sonderfälle (Monero LMDB + rsync) Geschwindigkeitsoptimierung verbessert, nicht zufriedenstellend.
 
-Replikation (z. B. trigger_replication) folgt in späteren Versionen
+Replikation (z.B. trigger_replication) folgt in späteren Versionen
+Import/Export für Nativ/ StartOS start9/ Umbrel usw. in Planung
 
 Zielgruppe
 
-Diese Version richtet sich an:
-
+Diese Version richtet sich weiter an:
 erfahrene Admins
-
 ZFS-basierte Setups
-
 Betreiber von Blockchain-Nodes
-
-Nicht geeignet für „Fire & Forget“.
+Nicht geeignet für "Fire & Forget".
 
 Upgrade-Hinweis
-
-v1.0.0 ist kein In-Place-Upgrade früherer Script-Stände.
-Es ist ein neuer, stabiler Ausgangspunkt.
+v1.1.4 ist primär eine Dokumentations- und Governance-Aktualisierung.
+Keine In-Place-Migration erforderlich.
