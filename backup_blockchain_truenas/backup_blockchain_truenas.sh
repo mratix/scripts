@@ -48,9 +48,8 @@ SRC_BASE=""
 DEST_BASE=""
 SRCDIR=""
 DESTDIR=""
-CLI_SERVICE=""
 CLI_MODE=""
-
+CLI_SERVICE=""
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude='/.zfs'
@@ -58,8 +57,6 @@ RSYNC_EXCLUDES=(
   --exclude='/.snapshot'
   --exclude='/.snapshot/**'
 )
-LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
-STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
@@ -70,29 +67,37 @@ declare -A SERVICE_APP_MAP=(
   [monerod]="monerod"
   [chia]="chia"
 )
+LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
+STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
+
 TELEMETRY_ENABLED=true
-TELEMETRY_BACKEND="syslog"    # influx
-METRIC_EXIT_CODE=""
-METRIC_RUNTIME=""
-BLOCK_HEIGHT=""  # Blockheight
-SERVICE_RUNNING=""
+TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
+BLOCK_HEIGHT=""                 # Blockheight
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
-SERVICE_GETDATA=true
-SERVICE_STOP_METHOD="graceful" # midclt|graceful|docker
-SERVICE_WAS_RUNNING=""
+SERVICE_STOP_METHOD="graceful"  # midclt|graceful|docker
 CLI_OVERRIDES=()
+
+########################################
+# Helper variables and state holder
+#
+METRIC_EXIT_CODE=""
+METRIC_RUNTIME=""
+SERVICE_GETDATA=true
+SERVICE_RUNNING=""
+SERVICE_WAS_RUNNING=""
 
 ########################################
 # Runtime flags
 # These MUST NOT be set via config files
 # CLI / environment only
 FORCE=false
+DEBUG=false
+INIT_CONFIG=false
+# These Runtime flags can be set via config files
+DRY_RUN="${DRY_RUN:-false}"
 VERIFY="${VERIFY:-true}"
 VERBOSE="${VERBOSE:-false}"
-DEBUG=false
-DRY_RUN=false
-INIT_CONFIG=false
 
 ########################################
 # Logging helpers
@@ -317,6 +322,7 @@ list_snapshots() {
 
 
 ########################################
+# Main task
 # Backup (rsync-based, snapshot protected)
 # Restore (interactive, never headless)
 #
@@ -405,7 +411,7 @@ vlog "__verify_backup_restore__"
         set_statefile verify_status "partial"
     fi
 
-    log "Starting rsync dry-run verify"
+    log "Starting rsync verify"
     rsync -nav \
         "${RSYNC_EXCLUDES[@]}" \
         "$SRCDIR/" "$DESTDIR/" \
@@ -480,7 +486,7 @@ vlog "__service_stop_graceful__"
     esac
 
     service_stop_docker
-vlog "__service_stop_graceful__"
+vlog "__service_stop_graceful__ done"
 }
 
 service_stop_midclt() {
@@ -575,6 +581,7 @@ vlog "__rotate_logfile__"
     fi
 
     log "Rotated ${service_logfile} -> ${rotated_file}"
+vlog "__rotate_logfile__ done"
 }
 
 ########################################
@@ -907,11 +914,11 @@ DEST_BASE="/mnt/tank/backups"
 USE_USB=false
 USB_ID=""
 
-VERIFY=true # enable always verify
-VERBOSE=false # enable verbose outputs
+VERIFY=true                     # enable always verify
+VERBOSE=true                    # enable verbose outputs
 
 TELEMETRY_ENABLED=true
-TELEMETRY_BACKEND="syslog"    # none|syslog|http|influx
+TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
 EOF
       ;;
     host)
