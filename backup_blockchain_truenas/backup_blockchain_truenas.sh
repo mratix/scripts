@@ -119,6 +119,7 @@ error() {
 # Statefile helpers (minimal audit trail)
 #
 set_statefile() {
+vlog "__set_statefile__"
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
   if [ -f "$STATEFILE" ]; then
@@ -139,6 +140,7 @@ set_statefile() {
 # - Later files override earlier ones
 # - CLI / environment variables override config
 load_config() {
+vlog "__load_config__"
     local cfg
 
     for cfg in "$@"; do
@@ -168,6 +170,7 @@ load_config() {
 # default.conf -> machine.conf -> $THIS_HOST.conf
 #
 load_config_chain() {
+vlog "__load_config_chain__"
     local cfg
     local scriptdir
 
@@ -189,9 +192,8 @@ load_config_chain() {
 # Preparation
 #
 prepare() {
+vlog "__prepare__"
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable: $STATEFILE"
-
-    vlog "prepare__ start"
     log "Given is:"
     log "  POOL=${POOL} DATASET=${DATASET} SERVICE=${SERVICE}"
     log "Resolved paths:"
@@ -205,7 +207,6 @@ sleep 4 # give some time to look at the output
     [ -n "$DESTDIR" ] || error "DESTDIR not set"
     [ -d "$SRCDIR" ]  || error "Source directory does not exist: $SRCDIR"
     mkdir -p "$DESTDIR" || error "Failed to create destination: $DESTDIR"
-    vlog "prepare__ done"
 }
 
 ########################################
@@ -240,6 +241,7 @@ take_snapshot() {
 ########################################
 #
 list_snapshots_entries() {
+vlog "__list_snapshots_entries__"
     zfs list -t snapshot -o name,creation \
         | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
             $1 ~ "^"ds {
@@ -319,7 +321,7 @@ list_snapshots() {
 # Restore (interactive, never headless)
 #
 backup_restore_blockchain() {
-    vlog "backup_restore_blockchain__ start"
+vlog "__backup_restore_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
         log "Starting rsync dry-run backup ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
@@ -353,15 +355,13 @@ case "$rsync_exit" in
         error "rsync failed code=$rsync_exit"
         ;;
     esac
-
-    vlog "backup_restore_blockchain__ done"
 }
 
 ########################################
 # Merge (rsync-based, snapshot protected)
 #
 merge_dirs() {
-vlog "merge_dirs__ start"
+vlog "__merge_dirs__"
 
 # take snapshot destination-dataset, not source
 local saved_pool="$POOL"
@@ -385,7 +385,7 @@ fi
 # Verify
 #
 verify_backup_restore() {
-    vlog "verify_backup_restore__ start"
+vlog "__verify_backup_restore__"
 
     [ -d "$SRCDIR" ]  || error "Source directory missing: $SRCDIR"
     [ -d "$DESTDIR" ] || error "Backup directory missing: $DESTDIR"
@@ -421,7 +421,7 @@ verify_backup_restore() {
     fi
 
     set_statefile verify_status "success"
-    vlog "verify_backup_restore__ done"
+vlog "__verify_backup_restore__ done"
 }
 
 ########################################
@@ -440,6 +440,7 @@ service_stop() {
 }
 
 service_stop_docker() {
+vlog "__service_stop_docker__"
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
@@ -452,6 +453,7 @@ service_stop_docker() {
 }
 
 service_stop_graceful() {
+vlog "__service_stop_graceful__"
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
@@ -478,9 +480,11 @@ service_stop_graceful() {
     esac
 
     service_stop_docker
+vlog "__service_stop_graceful__"
 }
 
 service_stop_midclt() {
+vlog "__service_stop_midclt__"
     local app_name="${SERVICE_APP_MAP[$SERVICE]:-$SERVICE}"
 
     if ! command -v midclt >/dev/null 2>&1; then
@@ -515,6 +519,7 @@ service_start() {
 # Rotating log file
 #
 rotate_logfile() {
+vlog "__rotate_logfile__"
     local service_logfile
     local logfile_dir logfile_name logfile_base
     local rotated_file
@@ -576,6 +581,7 @@ rotate_logfile() {
 # Helpers
 #
 resolve_paths() {
+vlog "__resolve_paths__"
   local src_base dest_base src_root dest_root svc
 
   [ -n "$POOL" ]    || error "POOL not set"
@@ -631,6 +637,7 @@ docker_exec() {
 }
 
 get_block_height() {
+vlog "__get_block_height__"
   if check_service_running; then
     # get from running service
     local ct
@@ -715,6 +722,7 @@ get_service_data() {
 # Metrics / audit
 #
 collect_metrics() {
+vlog "__collect_metrics__"
     METRIC_RUNTIME="${1:-0}"
     METRIC_EXIT_CODE="${2:-0}"
 
@@ -775,6 +783,7 @@ telemetry_none() {
 }
 
 telemetry_event() {
+vlog "__telemetry_event__"
   local level="$1"
   local msg="$2"
   local source="${3:-script}"
@@ -797,6 +806,7 @@ telemetry_event() {
 
 
 send_telemetry() {
+vlog "__send_telemetry__"
  if [ "$TELEMETRY_ENABLED" = true ]; then
     local runtime="$1" exit="$2" src="$3" dst="$4"
 
@@ -839,20 +849,22 @@ send_telemetry_http() {
 # Create example config files
 #
 init_config() {
+vlog "__init_config__"
   log "Initializing config files"
 
   local host
   host="$(hostname -s)"
 
-  create_cfg "default.conf"   default
-  create_cfg "machine.conf"   machine
-  create_cfg "${host}.conf.example"   host
+  create_config "default.conf"   default
+  create_config "machine.conf"   machine
+  create_config "${host}.conf.example"   host
 
   log "Config initialization complete"
   log "Edit the files and rerun without --init-config"
 }
 
-create_cfg() {
+create_config() {
+vlog "__create_config__"
   local file="$1"
   local type="$2"
 
@@ -917,12 +929,14 @@ EOF
       error "Unknown config type: $type"
       ;;
   esac
+vlog "__create_config__ done"
 }
 
 ########################################
 # Parsing CLI arguments
 #
 parse_cli_args() {
+vlog "__parse_cli_args__"
   local OPTIONS
   OPTIONS=$(getopt -o 'm:s:gtf' \
   --long mode:,service:,getdata,verbose,debug,dry-run,force,init-config,help \
@@ -987,6 +1001,7 @@ parse_cli_args() {
   done
 
 # Handle non-option arguments (VAR=VALUE overrides only)
+vlog "__parse_cli_args_non__"
   CLI_OVERRIDES=()
   if [[ $# -gt 0 ]]; then
     local arg
@@ -1002,6 +1017,7 @@ parse_cli_args() {
 
 # CLI overrides (for testing, without changing config)
 apply_cli_overrides() {
+vlog "__apply_cli_overrides__"
   local override key value
   local -a allowed_vars=(
     DATASET
@@ -1067,6 +1083,7 @@ EOF
 ########################################
 # Main
 #
+vlog "__main__ start"
 $DEBUG && set -x # enable debug
 
 START_TS=$(date +%s)
@@ -1100,6 +1117,7 @@ apply_cli_overrides
 resolve_home_paths
 
 # ab hier: normaler Betrieb, SERVICE zwingend
+vlog "__main_normal__"
 if [[ -z "${SERVICE:-}" ]]; then
   error "SERVICE not set"
 fi
@@ -1121,6 +1139,7 @@ fi
 ########################################
 # Execute part
 #
+vlog "__main_execute__"
 EXIT_CODE=0
 case "$MODE" in
     backup)
@@ -1165,6 +1184,7 @@ esac
 ########################################
 # Telemetry
 #
+vlog "__main_telemetry__"
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 END_TS=$(date +%s)
