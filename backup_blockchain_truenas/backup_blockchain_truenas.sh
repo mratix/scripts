@@ -412,16 +412,25 @@ vlog "__verify_backup_restore__"
     fi
 
     log "Starting rsync verify"
-    rsync -nav \
+    local verify_log="/tmp/verify-${SERVICE}.log"
+    local verify_diffs="/tmp/verify-${SERVICE}-diffs.log"
+    rsync -na --delete --itemize-changes --out-format='%i %n%L' \
         "${RSYNC_EXCLUDES[@]}" \
         "$SRCDIR/" "$DESTDIR/" \
-        >"/tmp/verify-${SERVICE}.log"
+        >"$verify_log"
+    local rsync_exit=$?
 
-    if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
+    if [[ "$rsync_exit" -ne 0 ]]; then
+        error "Verify rsync failed code=$rsync_exit"
+    fi
+
+    grep -Ev '^(sending incremental file list|sent |total size|$)' "$verify_log" >"$verify_diffs" || true
+
+    if [[ -s "$verify_diffs" ]]; then
         set_statefile verify_status "partial"
         if $VERBOSE; then
             log "Verify diffs detected:"
-            sed 's/^/  /' "/tmp/verify-${SERVICE}.log" | tee -a "$LOGFILE"
+            sed 's/^/  /' "$verify_diffs" | tee -a "$LOGFILE"
         fi
         error "Verify found differences"
     fi
@@ -560,13 +569,13 @@ vlog "__rotate_logfile__"
         suffix="-unclean"
     fi
 
-    BLOCK_HEIGHT="${BLOCK_HEIGHT:-$(get_block_height || true)}"
-    if [[ -z "${BLOCK_HEIGHT}" || "${BLOCK_HEIGHT}" -lt 111111 ]]; then
-        #vlog "Log rotation skipped: block height not available or below threshold"
-        height=""
-        return 0
-    else
+    local raw_height
+    raw_height="${BLOCK_HEIGHT:-$(get_block_height || true)}"
+    BLOCK_HEIGHT="$(normalize_block_height "$raw_height")"
+    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -ge 111111 ]]; then
         height="_h${BLOCK_HEIGHT}"
+    else
+        height=""
     fi
 
     logfile_dir="$(dirname "$service_logfile")"
@@ -674,6 +683,11 @@ vlog "__get_block_height__"
   fi
 }
 
+normalize_block_height() {
+  local value="$1"
+  awk 'match($0, /[0-9]+/) {print substr($0, RSTART, RLENGTH); exit}' <<<"$value"
+}
+
 check_service_running() {
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}"
@@ -748,7 +762,7 @@ vlog "__collect_metrics__"
 
     METRIC_SERVICE="$SERVICE"
     METRIC_MODE="$MODE"
-    METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
+    METRIC_BLOCK_HEIGHT="$(normalize_block_height "$(get_block_height || true)")"
 
     set_statefile block_height "$METRIC_BLOCK_HEIGHT"
     set_statefile snapshot_count "$METRIC_SNAPSHOT_COUNT"
@@ -1203,4 +1217,3 @@ exit "$EXIT_CODE"
 #
 # End
 ########################################
-
