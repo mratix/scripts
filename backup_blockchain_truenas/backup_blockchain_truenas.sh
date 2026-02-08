@@ -81,6 +81,7 @@ SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
 SERVICE_GETDATA=true
 SERVICE_STOP_METHOD="docker" # docker|graceful|midclt
+SERVICE_WAS_RUNNING=""
 CLI_OVERRIDES=()
 
 # Runtime flags:
@@ -513,6 +514,7 @@ rotate_logfile() {
     local logfile_dir logfile_name logfile_base
     local rotated_file
     local suffix=""
+    local was_running
 
     if [[ "$MODE" != "backup" ]]; then
         return 0
@@ -535,8 +537,13 @@ rotate_logfile() {
         return 0
     fi
 
-    check_service_running || true
-    if [[ "${SERVICE_RUNNING}" == true ]]; then
+    was_running="${SERVICE_WAS_RUNNING:-$SERVICE_RUNNING}"
+    if [[ -z "${was_running}" ]]; then
+        check_service_running || true
+        was_running="${SERVICE_RUNNING}"
+    fi
+
+    if [[ "${was_running}" == true ]]; then
         suffix="-unclean"
     fi
 
@@ -551,7 +558,7 @@ rotate_logfile() {
     logfile_base="${logfile_name%.*}"
     rotated_file="${logfile_dir}/${logfile_base}_h${METRIC_BLOCK_HEIGHT}${suffix}.log"
 
-    if [[ "${SERVICE_RUNNING}" == true ]]; then
+    if [[ "${was_running}" == true ]]; then
         cp -u "$service_logfile" "$rotated_file" || warn "Failed to copy log to ${rotated_file}"
     else
         mv -u "$service_logfile" "$rotated_file" || warn "Failed to move log to ${rotated_file}"
@@ -1112,6 +1119,8 @@ fi
 EXIT_CODE=0
 case "$MODE" in
     backup)
+        check_service_running || true
+        SERVICE_WAS_RUNNING="${SERVICE_RUNNING}"
         take_snapshot
         $SERVICE_STOP_BEFORE && service_stop
         rotate_logfile
