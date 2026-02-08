@@ -307,8 +307,8 @@ $LOGGER "$(date +%y%m%d%H%M%S) end task backup main"
 
 # --- postbackup tasks, restart service
 postbackup(){
-if [ ! "$restore" ]; then
-    # no service start after restore
+if [[ "$restore" == false ]]; then
+    chown -R apps:apps ${srcdir}
     echo ""
     echo "Restart service $service..."
     [ "$service" == "bitcoind" ] && midclt call chart.release.scale '${service}-knots' '{"replica_count":1}'
@@ -316,11 +316,11 @@ if [ ! "$restore" ]; then
     [ "$service" == "monerod" ] && midclt call chart.release.scale '${service}' '{"replica_count":1}'
 #error: Method does not exist
 else
+    chown -R apps ${destdir}
+        # no service start after restore
     echo "Restore task finished. Check the result in ${destdir}."
     echo "Service $service will not automaticaly restarted."
 fi
-    chown -R apps:apps ${srcdir}
-    #chown -R apps ${destdir}
 
 echo "Script ended at $(date +%H:%M:%S)"
 echo "End."
