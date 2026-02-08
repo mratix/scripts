@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.3
+# Gold Release v1.1.4
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS Scale
@@ -38,18 +38,10 @@
 set -Eeuo pipefail
 
 ########################################
-# Globals / Defaults
+# Config defaults
 #
-MODE="backup"                   # backup | merge | verify | restore
-SERVICE=""                      # bitcoind|monerod|chia
-POOL=""
-DATASET=""
-SRC_BASE=""
-DEST_BASE=""
-SRCDIR=""
-DESTDIR=""
-CLI_MODE=""
-CLI_SERVICE=""
+LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
+STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude='/.zfs'
@@ -67,16 +59,27 @@ declare -A SERVICE_APP_MAP=(
   [monerod]="monerod"
   [chia]="chia"
 )
-LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
-STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
-
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
-BLOCK_HEIGHT=""                 # Blockheight
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
 SERVICE_STOP_METHOD="graceful"  # midclt|graceful|docker
+
+########################################
+# Runtime defaults
+#
+MODE="backup"                   # backup | merge | verify | restore
+SERVICE=""                      # bitcoind|monerod|chia
+POOL=""
+DATASET=""
+SRC_BASE=""
+DEST_BASE=""
+SRCDIR=""
+DESTDIR=""
+CLI_MODE=""
+CLI_SERVICE=""
 CLI_OVERRIDES=()
+BLOCK_HEIGHT=""                 # Blockheight
 
 ########################################
 # Helper variables and state holder
