@@ -39,8 +39,7 @@ set -Eeuo pipefail
 
 ########################################
 # Globals / Defaults
-########################################
-
+#
 MODE="backup"                   # backup | merge | verify | restore
 SERVICE=""                      # bitcoind|monerod|chia
 POOL=""
@@ -71,8 +70,8 @@ declare -A SERVICE_APP_MAP=(
   [monerod]="monerod"
   [chia]="chia"
 )
-TELEMETRY_ENABLED=false
-TELEMETRY_BACKEND=""    # influx
+TELEMETRY_ENABLED=true
+TELEMETRY_BACKEND="syslog"    # influx
 METRIC_EXIT_CODE=""
 METRIC_RUNTIME=""
 METRIC_BLOCK_HEIGHT=""  # Blockheight
@@ -80,13 +79,14 @@ SERVICE_RUNNING=""
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
 SERVICE_GETDATA=true
-SERVICE_STOP_METHOD="docker" # docker|graceful|midclt
+SERVICE_STOP_METHOD="graceful" # midclt|graceful|docker
 SERVICE_WAS_RUNNING=""
 CLI_OVERRIDES=()
 
-# Runtime flags:
-# These MUST NOT be set via config files.
-# CLI / environment only.
+########################################
+# Runtime flags
+# These MUST NOT be set via config files
+# CLI / environment only
 FORCE=false
 VERIFY="${VERIFY:-true}"
 VERBOSE="${VERBOSE:-false}"
@@ -96,8 +96,7 @@ INIT_CONFIG=false
 
 ########################################
 # Logging helpers
-########################################
-
+#
 show() {
     echo "$*"
 }
@@ -118,8 +117,7 @@ error() {
 
 ########################################
 # Statefile helpers (minimal audit trail)
-########################################
-
+#
 write_statefile() {
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
@@ -133,14 +131,13 @@ write_statefile() {
   fi
 }
 
+
 ########################################
 # Config handling
-########################################
 # Rules:
+# - Missing files are ignored with warning
 # - Later files override earlier ones
 # - CLI / environment variables override config
-# - Missing files are ignored with warning
-
 load_config() {
     local cfg
 
@@ -166,9 +163,10 @@ load_config() {
     done
 }
 
-
+########################################
 # Load configuration files (order matters)
-#   default.conf -> machine.conf -> $THIS_HOST.conf
+# default.conf -> machine.conf -> $THIS_HOST.conf
+#
 load_config_chain() {
     local cfg
     local scriptdir
@@ -189,8 +187,7 @@ load_config_chain() {
 
 ########################################
 # Preparation
-########################################
-
+#
 prepare() {
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable: $STATEFILE"
 
@@ -213,8 +210,7 @@ sleep 4 # give some time to look at the output
 
 ########################################
 # ZFS snapshot handling
-########################################
-
+#
 take_snapshot() {
     local snapdataset snapname
     snapdataset="${POOL}/${DATASET}/${SERVICE}"
@@ -241,7 +237,8 @@ take_snapshot() {
     log "Snapshot created successfully: ${LAST_SNAPSHOT}"
 }
 
-
+########################################
+#
 list_snapshots_entries() {
     zfs list -t snapshot -o name,creation \
         | awk -v ds="${POOL}/${DATASET}/${SERVICE}@" '
@@ -316,16 +313,16 @@ list_snapshots() {
     fi
 }
 
+
 ########################################
 # Backup (rsync-based, snapshot protected)
 # Restore (interactive, never headless)
-########################################
-
+#
 backup_restore_blockchain() {
     vlog "backup_restore_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
+        log "Starting rsync dry-run backup ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
@@ -362,8 +359,7 @@ case "$rsync_exit" in
 
 ########################################
 # Merge (rsync-based, snapshot protected)
-########################################
-
+#
 merge_dirs() {
 vlog "merge_dirs__ start"
 
@@ -374,7 +370,7 @@ take_snapshot
 POOL="$saved_pool"
 
 if [ "$DRY_RUN" = true ]; then
-    log "DRY-RUN: rsync ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
+    log "Starting rsync dry-run merge ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
     return 0
 fi
 
@@ -385,7 +381,9 @@ fi
     telemetry_event "info" "merge completed" "script"
 }
 
-
+########################################
+# Verify
+#
 verify_backup_restore() {
     vlog "verify_backup_restore__ start"
 
@@ -407,7 +405,7 @@ verify_backup_restore() {
         state_set verify_status "partial"
     fi
 
-    log "Running rsync dry-run verify (no delete, no checksum)"
+    log "Starting rsync dry-run verify"
     rsync -nav \
         "${RSYNC_EXCLUDES[@]}" \
         "$SRCDIR/" "$DESTDIR/" \
@@ -426,7 +424,9 @@ verify_backup_restore() {
     vlog "verify_backup_restore__ done"
 }
 
-# --- pre-tasks, stop service
+########################################
+# pre-tasks, stop service
+#
 service_stop() {
     case "${SERVICE_STOP_METHOD}" in
         docker) service_stop_docker ;;
@@ -437,19 +437,6 @@ service_stop() {
             service_stop_docker
             ;;
     esac
-}
-
-# --- post-tasks, start service
-service_start() {
-    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
-    [[ -n "$ct" ]] || return 0
-
-    log "Starting service container: $ct"
-    if docker start "$ct" >/dev/null 2>&1; then
-        SERVICE_RUNNING=true
-    else
-        warn "Failed to start $ct"
-    fi
 }
 
 service_stop_docker() {
@@ -474,7 +461,7 @@ service_stop_graceful() {
         return 0
     fi
 
-    log "Attempting graceful stop inside container: $ct"
+    log "Attempting graceful stop (inside container): $ct"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
@@ -509,6 +496,24 @@ service_stop_midclt() {
     fi
 }
 
+########################################
+# post-tasks, start service
+#
+service_start() {
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    log "Starting service container: $ct"
+    if docker start "$ct" >/dev/null 2>&1; then
+        SERVICE_RUNNING=true
+    else
+        warn "Failed to start $ct"
+    fi
+}
+
+########################################
+# Rotating log file
+#
 rotate_logfile() {
     local service_logfile
     local logfile_dir logfile_name logfile_base
@@ -565,6 +570,54 @@ rotate_logfile() {
     fi
 
     log "Rotated ${service_logfile} -> ${rotated_file}"
+}
+
+########################################
+# Helpers
+#
+resolve_paths() {
+  local src_base dest_base src_root dest_root svc
+
+  [ -n "$POOL" ]    || error "POOL not set"
+  [ -n "$DATASET" ] || error "DATASET not set"
+  [ -n "$SERVICE" ] || error "SERVICE not set"
+
+  src_base="${SRC_BASE:-/mnt/${POOL}/${DATASET}}"
+  dest_base="${DEST_BASE:-/mnt/tank/backups/${DATASET}}"
+
+  src_root="${src_base%/}"
+  dest_root="${dest_base%/}"
+  for svc in "${!SERVICE_CT_MAP[@]}"; do
+    if [[ "$src_root" == *"/${svc}" ]]; then
+      src_root="${src_root%/${svc}}"
+      break
+    fi
+  done
+
+  for svc in "${!SERVICE_CT_MAP[@]}"; do
+    if [[ "$dest_root" == *"/${svc}" ]]; then
+      dest_root="${dest_root%/${svc}}"
+      break
+    fi
+  done
+
+  SRCDIR="${src_root%/}/${SERVICE}"
+  DESTDIR="${dest_root%/}/${SERVICE}"
+
+  SRC_BASE="$src_root"
+  DEST_BASE="$dest_root"
+}
+
+resolve_home_paths() {
+  local effective_user effective_home
+
+  effective_user="${SUDO_USER:-$USER}"
+  effective_home="$(getent passwd "$effective_user" | cut -d: -f6)"
+
+  if [[ -n "$effective_home" && "${HOME:-}" = "/root" && -n "${SUDO_USER:-}" ]]; then
+    LOGFILE="${LOGFILE/#\/root/$effective_home}"
+    STATEFILE="${STATEFILE/#\/root/$effective_home}"
+  fi
 }
 
 docker_exec() {
@@ -626,7 +679,7 @@ check_service_running() {
     return 1
 }
 
-# --- grab data from service, little node-info
+# grab data from service, little node-info
 get_service_data() {
   check_service_running || return 0
   if [[ "$SERVICE_RUNNING" == true ]]; then
@@ -634,7 +687,7 @@ get_service_data() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
 
-    show "Short Service summary:"
+    show "Short service summary:"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
@@ -656,8 +709,7 @@ get_service_data() {
 
 ########################################
 # Metrics / audit
-########################################
-
+#
 collect_metrics() {
     METRIC_RUNTIME="${1:-0}"
     METRIC_EXIT_CODE="${2:-0}"
@@ -793,7 +845,9 @@ send_telemetry_http() {
     }" || true
 }
 
-
+########################################
+# Create example config files
+#
 init_config() {
   log "Initializing config files"
 
@@ -875,6 +929,9 @@ EOF
   esac
 }
 
+########################################
+# Parsing CLI arguments
+#
 parse_cli_args() {
   local OPTIONS
   OPTIONS=$(getopt -o 'm:s:gtf' \
@@ -953,6 +1010,7 @@ parse_cli_args() {
   fi
 }
 
+# CLI overrides (for testing, without changing config)
 apply_cli_overrides() {
   local override key value
   local -a allowed_vars=(
@@ -991,50 +1049,6 @@ apply_cli_overrides() {
   done
 }
 
-resolve_paths() {
-  local src_base dest_base src_root dest_root svc
-
-  [ -n "$POOL" ]    || error "POOL not set"
-  [ -n "$DATASET" ] || error "DATASET not set"
-  [ -n "$SERVICE" ] || error "SERVICE not set"
-
-  src_base="${SRC_BASE:-/mnt/${POOL}/${DATASET}}"
-  dest_base="${DEST_BASE:-/mnt/tank/backups/${DATASET}}"
-
-  src_root="${src_base%/}"
-  dest_root="${dest_base%/}"
-  for svc in "${!SERVICE_CT_MAP[@]}"; do
-    if [[ "$src_root" == *"/${svc}" ]]; then
-      src_root="${src_root%/${svc}}"
-      break
-    fi
-  done
-
-  for svc in "${!SERVICE_CT_MAP[@]}"; do
-    if [[ "$dest_root" == *"/${svc}" ]]; then
-      dest_root="${dest_root%/${svc}}"
-      break
-    fi
-  done
-
-  SRCDIR="${src_root%/}/${SERVICE}"
-  DESTDIR="${dest_root%/}/${SERVICE}"
-
-  SRC_BASE="$src_root"
-  DEST_BASE="$dest_root"
-}
-
-resolve_home_paths() {
-  local effective_user effective_home
-
-  effective_user="${SUDO_USER:-$USER}"
-  effective_home="$(getent passwd "$effective_user" | cut -d: -f6)"
-
-  if [[ -n "$effective_home" && "${HOME:-}" = "/root" && -n "${SUDO_USER:-}" ]]; then
-    LOGFILE="${LOGFILE/#\/root/$effective_home}"
-    STATEFILE="${STATEFILE/#\/root/$effective_home}"
-  fi
-}
 
 usage() {
   cat <<EOF
@@ -1062,13 +1076,12 @@ EOF
 
 ########################################
 # Main
-########################################
-
+#
 $DEBUG && set -x # enable debug
 
 START_TS=$(date +%s)
-THIS_HOST=${THIS_HOST:-$(hostname -s)}
-show "Script started"
+THIS_HOST=$(hostname -s)
+show "Script started on node $THIS_HOST"
 
 vlog "Start settings: $@" # all given args
 parse_cli_args "$@"
@@ -1115,7 +1128,9 @@ if $USE_USB; then
 fi
 
 
-# --- execute part ---
+########################################
+# Execute part
+#
 EXIT_CODE=0
 case "$MODE" in
     backup)
@@ -1156,17 +1171,19 @@ case "$MODE" in
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
         ;;
 esac
-# --- execute part done ---
 
+########################################
+# Telemetry
+#
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
-
-# --- telemetry
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 collect_metrics "$RUNTIME" "$EXIT_CODE"
 telemetry_run_end "$RUNTIME" "$EXIT_CODE"
 log "Script finished successfully"
 exit "$EXIT_CODE"
+#
+# End
+########################################
 
-# ----------------------------------------------------------
