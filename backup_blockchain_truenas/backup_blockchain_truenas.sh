@@ -74,7 +74,7 @@ TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="syslog"    # influx
 METRIC_EXIT_CODE=""
 METRIC_RUNTIME=""
-METRIC_BLOCK_HEIGHT=""  # Blockheight
+BLOCK_HEIGHT=""  # Blockheight
 SERVICE_RUNNING=""
 SERVICE_STOP_BEFORE=true
 SERVICE_START_AFTER=false
@@ -118,7 +118,7 @@ error() {
 ########################################
 # Statefile helpers (minimal audit trail)
 #
-write_statefile() {
+set_statefile() {
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
   if [ -f "$STATEFILE" ]; then
@@ -228,7 +228,7 @@ take_snapshot() {
     fi
 
     LAST_SNAPSHOT="${snapdataset}@${snapname}"
-    state_set last_snapshot "$LAST_SNAPSHOT"
+    set_statefile last_snapshot "$LAST_SNAPSHOT"
 
     if [ "$TELEMETRY_ENABLED" = true ]; then
         telemetry_event "info" "snapshot created" "script"
@@ -402,7 +402,7 @@ verify_backup_restore() {
     if [[ "$src_size" -ne "$dst_size" ]]; then
         warn "Size mismatch detected (not fatal on ZFS)"
         telemetry_event "warn" "Size mismatch detected" "script"
-        state_set verify_status "partial"
+        set_statefile verify_status "partial"
     fi
 
     log "Starting rsync dry-run verify"
@@ -412,7 +412,7 @@ verify_backup_restore() {
         >"/tmp/verify-${SERVICE}.log"
 
     if [[ -s "/tmp/verify-${SERVICE}.log" ]]; then
-        state_set verify_status "partial"
+        set_statefile verify_status "partial"
         if $VERBOSE; then
             log "Verify diffs detected:"
             sed 's/^/  /' "/tmp/verify-${SERVICE}.log" | tee -a "$LOGFILE"
@@ -420,7 +420,7 @@ verify_backup_restore() {
         error "Verify found differences"
     fi
 
-    state_set verify_status "success"
+    set_statefile verify_status "success"
     vlog "verify_backup_restore__ done"
 }
 
@@ -520,13 +520,10 @@ rotate_logfile() {
     local rotated_file
     local suffix=""
     local was_running
+    local height
+    local today=$(date +%y%m%d)
 
     if [[ "$MODE" != "backup" ]]; then
-        return 0
-    fi
-
-    if [[ "${METRICS_BLOCKHEIGHT:-false}" != true ]]; then
-        vlog "Log rotation skipped: METRICS_BLOCKHEIGHT disabled"
         return 0
     fi
 
@@ -552,16 +549,19 @@ rotate_logfile() {
         suffix="-unclean"
     fi
 
-    METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
-    if [[ -z "${METRIC_BLOCK_HEIGHT}" || "${METRIC_BLOCK_HEIGHT}" -lt 111111 ]]; then
-        vlog "Log rotation skipped: block height not available or below threshold"
+    BLOCK_HEIGHT="${BLOCK_HEIGHT:-$(get_block_height || true)}"
+    if [[ -z "${BLOCK_HEIGHT}" || "${BLOCK_HEIGHT}" -lt 111111 ]]; then
+        #vlog "Log rotation skipped: block height not available or below threshold"
+        height=""
         return 0
+    else
+        height="_h${BLOCK_HEIGHT}"
     fi
 
     logfile_dir="$(dirname "$service_logfile")"
     logfile_name="$(basename "$service_logfile")"
     logfile_base="${logfile_name%.*}"
-    rotated_file="${logfile_dir}/${logfile_base}_h${METRIC_BLOCK_HEIGHT}${suffix}.log"
+    rotated_file="${logfile_dir}/${logfile_base}_${today}${height}${suffix}.log"
 
     if [[ "${was_running}" == true ]]; then
         cp -u "$service_logfile" "$rotated_file" || warn "Failed to copy log to ${rotated_file}"
@@ -631,6 +631,8 @@ docker_exec() {
 }
 
 get_block_height() {
+  if check_service_running; then
+    # get from running service
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
@@ -654,6 +656,8 @@ get_block_height() {
             return 1
             ;;
     esac
+  #elif    # parse from logfile
+  fi
 }
 
 check_service_running() {
@@ -729,28 +733,14 @@ collect_metrics() {
 
     METRIC_SERVICE="$SERVICE"
     METRIC_MODE="$MODE"
+    METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
 
-    METRIC_BLOCK_HEIGHT=""
-    if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
-        if check_service_running; then
-            METRIC_BLOCK_HEIGHT="$(get_block_height || true)"
-        else
-            METRIC_BLOCK_HEIGHT="0"
-        fi
-        vlog "Parsed Blockheight: $METRIC_BLOCK_HEIGHT"
-        if [[ -z "$METRIC_BLOCK_HEIGHT" ]]; then
-            METRIC_BLOCK_HEIGHT="0"
-        fi
-    fi
-
-    if [[ "${METRICS_BLOCKHEIGHT:-false}" = true ]]; then
-        state_set block_height "$METRIC_BLOCK_HEIGHT"
-    fi
-    state_set snapshot_count "$METRIC_SNAPSHOT_COUNT"
-    state_set last_run_service "$METRIC_SERVICE"
-    state_set last_run_mode "$METRIC_MODE"
-    state_set last_run_runtime_s "$METRIC_RUNTIME"
-    state_set last_run_exit_code "$METRIC_EXIT_CODE"
+    set_statefile block_height "$METRIC_BLOCK_HEIGHT"
+    set_statefile snapshot_count "$METRIC_SNAPSHOT_COUNT"
+    set_statefile last_run_service "$METRIC_SERVICE"
+    set_statefile last_run_mode "$METRIC_MODE"
+    set_statefile last_run_runtime_s "$METRIC_RUNTIME"
+    set_statefile last_run_exit_code "$METRIC_EXIT_CODE"
 }
 
 telemetry_run_end() {
@@ -1020,7 +1010,7 @@ apply_cli_overrides() {
     FORCE
     INIT_CONFIG
     LOGFILE
-    METRICS_BLOCKHEIGHT
+    BLOCK_HEIGHT
     POOL
     SERVICE_GETDATA
     SERVICE_STOP_METHOD
@@ -1067,7 +1057,7 @@ Options:
   --help
 
 Overrides (VAR=VALUE, after options):
-  DATASET DEST_BASE DRY_RUN FORCE INIT_CONFIG LOGFILE METRICS_BLOCKHEIGHT POOL
+  BLOCK_HEIGHT DATASET DEST_BASE DRY_RUN FORCE INIT_CONFIG LOGFILE POOL
   SERVICE_GETDATA SERVICE_RUNNING SERVICE_START_AFTER SERVICE_STOP_BEFORE
   SERVICE_STOP_METHOD SRC_BASE STATEFILE TELEMETRY_BACKEND TELEMETRY_ENABLED
   VERBOSE VERIFY
