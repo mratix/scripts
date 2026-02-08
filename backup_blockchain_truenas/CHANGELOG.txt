@@ -1,3 +1,7 @@
+v1.1.5
+  Defaulted SERVICE_START_AFTER to be unset and have check_service_running persist SERVICE_WAS_RUNNING while deriving a start-after default when unspecified, so headless runs can restore prior state safely.
+  Added a backup cleanup trap to restart services on error paths during backup execution, while keeping normal start behavior intact.
+
 v1.1.4 – Documentation & Governance Release
 
 - docs: refresh README.md and README.short to reflect current release state

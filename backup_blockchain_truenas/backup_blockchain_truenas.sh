@@ -2,7 +2,7 @@
 #
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.4
+# Gold Release v1.1.5
 # Maintenance release: config handling, init-config fixes, stability
 #
 # Backup & restore script for blockchain nodes on TrueNAS Scale
@@ -13,8 +13,8 @@
 #   - chia
 #
 # Supported long flags:
-#   --mode:     backup|merge|verify|restore
-#   --service:  bitcoind|monerod|chia
+#   --mode      backup|merge|verify|restore
+#   --service   bitcoind|monerod|chia
 #   --getdata
 #   --verbose
 #   --debug
@@ -62,7 +62,7 @@ declare -A SERVICE_APP_MAP=(
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
 SERVICE_STOP_BEFORE=true
-SERVICE_START_AFTER=false
+SERVICE_START_AFTER=""
 SERVICE_STOP_METHOD="graceful"  # midclt|graceful|docker
 
 ########################################
@@ -333,11 +333,11 @@ backup_restore_blockchain() {
 vlog "__backup_restore_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "Starting rsync dry-run backup ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
+        show "Starting rsync dry-run ${MODE} ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    show "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
+    log "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
     if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
         rsync_exit=$?
     else
@@ -534,6 +534,20 @@ service_start() {
 }
 
 ########################################
+# failed headless run can restore prior service state
+#
+restore_service() {
+    local exit_code=$?
+
+    if [[ "$exit_code" -ne 0 && "${SERVICE_START_AFTER:-false}" == true ]]; then
+        service_start
+    fi
+
+    trap - EXIT
+    exit "$exit_code"
+}
+
+########################################
 # Rotating log file
 #
 rotate_logfile() {
@@ -696,25 +710,27 @@ check_service_running() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     if [[ -z "$ct" ]]; then
         SERVICE_RUNNING=false
-        return 1
-    fi
-
-    if ! command -v docker >/dev/null 2>&1; then
+    elif ! command -v docker >/dev/null 2>&1; then
         warn "docker binary not available; assuming service is not running"
         SERVICE_RUNNING=false
-        return 1
+    elif docker ps -q -f "name=^${ct}$" | grep -q .; then
+        SERVICE_RUNNING=true
+    else
+        SERVICE_RUNNING=false
     fi
 
-    if docker ps -q -f "name=^${ct}$" | grep -q .; then
-        SERVICE_RUNNING=true
+    SERVICE_WAS_RUNNING="$SERVICE_RUNNING"
+    if [[ -z "${SERVICE_START_AFTER:-}" ]]; then
+        SERVICE_START_AFTER="$SERVICE_WAS_RUNNING"
+    fi
+
+    if [[ "$SERVICE_RUNNING" == true ]]; then
         return 0
     fi
-
-    SERVICE_RUNNING=false
     return 1
 }
 
-# grab data from service, little node-info
+# grab data from service, service overview-info
 get_service_data() {
   check_service_running || return 0
   if [[ "$SERVICE_RUNNING" == true ]]; then
@@ -1167,8 +1183,8 @@ vlog "__main_execute__"
 EXIT_CODE=0
 case "$MODE" in
     backup)
+        trap 'restore_service' EXIT
         check_service_running || true
-        SERVICE_WAS_RUNNING="${SERVICE_RUNNING}"
         take_snapshot
         $SERVICE_STOP_BEFORE && service_stop
         rotate_logfile
