@@ -5,18 +5,31 @@ version="260121-safe by Mr.AtiX"
 echo "-------------------------------------------------------------------------------"
 echo "Backup blockchain and or services to NAS"
 
-# --- variables
-today=$(date +%y%m%d)
-now=$(date +%y%m%d%H%M%S)
+# --- config
 LOGGER=/usr/bin/logger
-service=""
-restore=false
-is_mounted=false
 nasuser=rsync
 nashost=192.168.178.20
 nashostname=cronas
 nasshare=blockchain
+
+# --- runtime defaults
+today=$(date +%y%m%d)
+now=$(date +%y%m%d%H%M%S)
 nasmount=/mnt/$nashostname/$nasshare
+service=""
+restore=false
+is_mounted=false
+use_usb=false
+prune=false
+force=false
+debug=false
+height=0
+is_zfs=false
+is_splitted=false
+pool=""
+dataset=""
+srcdir=""
+destdir=""
 rsync_opts="-avz -P --update --stats --delete --info=progress2"
 
 
