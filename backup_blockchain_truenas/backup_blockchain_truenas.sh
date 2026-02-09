@@ -1,11 +1,9 @@
 #!/bin/bash
-#
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.5
-# Maintenance release: config handling, init-config fixes, stability
-#
 # Backup & restore script for blockchain nodes on TrueNAS Scale
+# Gold Release v1.1.5
+# Maintenance release: Logic errors elimination, stability, fine-tuning
 #
 # Supported services:
 #   - bitcoind
@@ -15,25 +13,21 @@
 # Supported long flags:
 #   --mode      backup|merge|verify|restore
 #   --service   bitcoind|monerod|chia
-#   --getdata
-#   --verbose
-#   --debug
-#   --dry-run
-#   --force
-#   --init-config
-#   --help
+#   --init-config --getdata --verbose --debug --dry-run --force --help
 #
 # Design goals:
 #   - deterministic
-#   - headless-safe (except restore)
+#   - headless-safe
 #   - ZFS-first (snapshots, replication)
-#   - rsync as fallback (merge,verify tool)
+#   - rsync as fallback (merge, verify)
 #   - minimal persistent state
+#   - configuration is externalized and layered
+#   - CLI always takes precedence and wins
+#   - Minimal and safe version available (backup_blockchain_truenas-safe.sh)
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
 # Refactor & extensions: ChatGPT codex <- With best thanks for the support
 # ============================================================
-#
 
 set -Eeuo pipefail
 
@@ -41,7 +35,8 @@ set -Eeuo pipefail
 # Config defaults
 #
 LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
-STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
+#STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
+STATEFILE=""
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude='/.zfs'
@@ -52,7 +47,7 @@ RSYNC_EXCLUDES=(
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
-  [chia]="ix-chia-farmer-1"
+  [chia]="ix-chia-chia-1"
 )
 declare -A SERVICE_APP_MAP=(
   [bitcoind]="bitcoind"
@@ -127,7 +122,6 @@ error() {
 # Statefile helpers (minimal audit trail)
 #
 set_statefile() {
-vlog "__set_statefile__"
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
   if [ -f "$STATEFILE" ]; then
@@ -139,7 +133,6 @@ vlog "__set_statefile__"
     fi
   fi
 }
-
 
 ########################################
 # Config handling
@@ -195,7 +188,6 @@ vlog "__load_config_chain__"
     done
 }
 
-
 ########################################
 # Preparation
 #
@@ -223,7 +215,7 @@ sleep 4 # give some time to look at the output
 take_snapshot() {
     local snapdataset snapname
     snapdataset="${POOL}/${DATASET}/${SERVICE}"
-    snapname="script-$(date +%Y-%m-%d_%H-%M-%S)"
+    snapname="script-$(date +%Y-%m-%d_%H-%M)"
 
     if [ "$DRY_RUN" = true ]; then
         log "DRY-RUN: zfs snapshot -r ${snapdataset}@${snapname}"
@@ -322,7 +314,6 @@ list_snapshots() {
         list_snapshots_table
     fi
 }
-
 
 ########################################
 # Main task
@@ -438,8 +429,8 @@ vlog "__verify_backup_restore__"
         error "Verify found differences"
     fi
 
-    set_statefile verify_status "success"
-vlog "__verify_backup_restore__ done"
+     log "Verify successfully - no differences"
+     set_statefile verify_status "success"
 }
 
 ########################################
@@ -567,7 +558,8 @@ vlog "__rotate_logfile__"
     case "$SERVICE" in
         bitcoind) service_logfile="${SRCDIR}/debug.log" ;;
         monerod) service_logfile="${SRCDIR}/bitmonero.log" ;;
-        chia) return 0 ;;
+        chia) service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log" ;;
+        #chia) return 0 ;;
         *) return 0 ;;
     esac
 
@@ -589,7 +581,7 @@ vlog "__rotate_logfile__"
     local raw_height
     raw_height="${BLOCK_HEIGHT:-$(get_block_height || true)}"
     BLOCK_HEIGHT="$(normalize_block_height "$raw_height")"
-    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -ge 111111 ]]; then
+    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 11111 ]]; then
         height="_h${BLOCK_HEIGHT}"
     else
         height=""
@@ -671,8 +663,9 @@ docker_exec() {
 
 get_block_height() {
 vlog "__get_block_height__"
-  if check_service_running; then
-    # get from running service
+  check_service_running
+  if [[ "$SERVICE_RUNNING" == true ]]; then
+    log "Get blockheight from running service"
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
@@ -683,20 +676,26 @@ vlog "__get_block_height__"
             docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
             ;;
         monerod)
-            #docker exec "$ct" monerod status 2>/dev/null | awk '/Height:/ {print $2}'
-            #3384305/3604686
-            #docker exec "$ct" monerod print_height 2>/dev/null | awk 'END {print $1}' # wert ans ende geh#ngt
             docker exec "$ct" monerod print_height 2>/dev/null | tail -n1
             #docker exec "$ct" monero-wallet-cli bc_height # unused
             ;;
         chia)
-            docker exec "$ct" chia blockchain height 2>/dev/null
+            docker exec "$ct" chia show --state 2>/dev/null | awk '/Height:/ {print $2}'
             ;;
         *)
             return 1
             ;;
     esac
-  #elif    # parse from logfile
+#  elif [[ "$SERVICE_RUNNING" == false ]]; then
+#    log "Parse blockheight from logfile"
+#    case "$SERVICE" in
+#        bitcoind)
+#            ;;
+#        monerod)
+#            ;;
+#        chia)
+#            ;;
+#    esac
   fi
 }
 
@@ -730,7 +729,7 @@ check_service_running() {
     return 1
 }
 
-# grab data from service, service overview-info
+# Retrieve data from service, service overview-info
 get_service_data() {
   check_service_running || return 0
   if [[ "$SERVICE_RUNNING" == true ]]; then
@@ -749,6 +748,8 @@ get_service_data() {
                 | while IFS= read -r line; do show "$line"; done
             ;;
         chia)
+            docker exec "$ct" chia show --state 2>/dev/null \
+                | while IFS= read -r line; do show "$line"; done
             ;;
         *)
             return 1
@@ -756,7 +757,6 @@ get_service_data() {
     esac
   fi
 }
-
 
 ########################################
 # Metrics / audit
@@ -844,7 +844,6 @@ vlog "__telemetry_event__"
   esac
 }
 
-
 send_telemetry() {
 vlog "__send_telemetry__"
  if [ "$TELEMETRY_ENABLED" = true ]; then
@@ -864,7 +863,6 @@ vlog "__send_telemetry__"
     esac
   fi
 }
-
 
 send_telemetry_syslog() {
 logger -t backup_restore_blockchain \
@@ -886,7 +884,7 @@ send_telemetry_http() {
 }
 
 ########################################
-# Create example config files
+# Create example configuration files
 #
 init_config() {
 vlog "__init_config__"
@@ -1055,7 +1053,7 @@ vlog "__parse_cli_args_non__"
   fi
 }
 
-# CLI overrides (for testing, without changing config)
+# CLI overrides (for testing, without changing the configuration)
 apply_cli_overrides() {
 vlog "__apply_cli_overrides__"
   local override key value
@@ -1087,6 +1085,7 @@ vlog "__apply_cli_overrides__"
     case " ${allowed_vars[*]} " in
       *" ${key} "*)
         declare -g "${key}=${value}"
+        log "Overrided setting: ${key}=${value}"
         ;;
       *)
         error "Unknown override variable: ${key}"
@@ -1128,7 +1127,7 @@ $DEBUG && set -x # enable debug
 
 START_TS=$(date +%s)
 THIS_HOST=$(hostname -s)
-show "Script started on node $THIS_HOST"
+show "Script started on Node $THIS_HOST"
 
 vlog "Start settings: $@" # all given args
 parse_cli_args "$@"
@@ -1144,7 +1143,7 @@ if $INIT_CONFIG; then
 fi
 
 load_config_chain
-vlog "Using settings: mode=${MODE}, service=${SERVICE}" # todo: after read config, show all feeded variables
+vlog "Using settings: " # todo: after read configs, show feeded variables $@ $* ?
 
 if [[ -n "${CLI_MODE:-}" ]]; then
   MODE="$CLI_MODE"
@@ -1153,16 +1152,16 @@ if [[ -n "${CLI_SERVICE:-}" ]]; then
   SERVICE="$CLI_SERVICE"
 fi
 apply_cli_overrides
-
 resolve_home_paths
 
-# ab hier: normaler Betrieb, SERVICE zwingend
+# from here: normal operation, SERVICE mandatory
 vlog "__main_normal__"
 if [[ -z "${SERVICE:-}" ]]; then
   error "SERVICE not set"
 fi
 
-resolve_paths
+STATEFILE="${SRCDIR}/$SERVICE.state" # temporary relocated, adapt to your own
+resolve_paths   # from here: SERVICE-folder to path attached
 prepare
 
 if [[ -n "${SERVICE_GETDATA:-}" ]]; then
@@ -1171,10 +1170,9 @@ fi
 
 if $USE_USB; then
   [[ -b "$USB_ID" ]] && DESTDIR="$USB_MOUNT/$DATASET/$SERVICE" || error "USB device not found"
-  # Automount minimal
+  # mount minimal
   # mount | grep "$USB_MOUNT" || mount "$USB_ID" "$USB_MOUNT"
 fi
-
 
 ########################################
 # Execute part
