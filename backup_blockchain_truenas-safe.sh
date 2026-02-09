@@ -35,7 +35,7 @@ rsync_opts="-avz -P --update --stats --delete --info=progress2"
 
 # --- mount destination
 mount_dest(){
-[ ! -d $nasmount ] && mkdir -p $nasmount
+[ ! -d "$nasmount" ] && mkdir -p $nasmount
 if [ "$use_usb" ]; then
     mount_usb
 else
@@ -60,6 +60,7 @@ fi
 # --- mount usb drive
 mount_usb(){
     # nasmount=/mnt/usb/$nasshare # has previous set
+    [ ! -d "/mnt/usb" ] && mkdir -p /mnt/usb
     mount | grep /mnt/usb >/dev/null
     [ $? -eq 0 ] || mount /dev/sdf1 /mnt/usb
     sleep 2

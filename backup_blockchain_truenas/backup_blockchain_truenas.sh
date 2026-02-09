@@ -802,7 +802,6 @@ telemetry_run_end() {
     esac
 }
 
-
 telemetry_http() {
     curl -fsS -XPOST "$INFLUX_URL" \
         --data-binary \
@@ -810,13 +809,11 @@ telemetry_http() {
 runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_HEIGHT}"
 }
 
-
 telemetry_syslog() {
     /usr/bin/logger -t backup_restore_blockchain \
       "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
 snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
 }
-
 
 telemetry_none() {
   return 0
@@ -1127,7 +1124,7 @@ $DEBUG && set -x # enable debug
 
 START_TS=$(date +%s)
 THIS_HOST=$(hostname -s)
-show "Script started on Node $THIS_HOST"
+show "Script started on Node: $THIS_HOST"
 
 vlog "Start settings: $@" # all given args
 parse_cli_args "$@"
