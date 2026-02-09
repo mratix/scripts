@@ -30,13 +30,14 @@ pool=""
 dataset=""
 srcdir=""
 destdir=""
+usbdev="/dev/sdf1"
 rsync_opts="-avz -P --update --stats --delete --info=progress2"
 
 
 # --- mount destination
 mount_dest(){
 [ ! -d "$nasmount" ] && mkdir -p $nasmount
-if [ "$use_usb" ]; then
+if [[ "$use_usb" == true ]]; then
     mount_usb
 else
     # mount nas share
@@ -62,7 +63,7 @@ mount_usb(){
     # nasmount=/mnt/usb/$nasshare # has previous set
     [ ! -d "/mnt/usb" ] && mkdir -p /mnt/usb
     mount | grep /mnt/usb >/dev/null
-    [ $? -eq 0 ] || mount /dev/sdf1 /mnt/usb
+    [ $? -eq 0 ] || mount $usbdev /mnt/usb
     sleep 2
     [ ! -f "$nasmount/usb.dummy" ] && { echo "[ ! ] Error: Mounted disk is not valid and or not prepared as backup storage! Exit."; exit 127; }
         if [ ! -w "$nasmount/" ]; then
