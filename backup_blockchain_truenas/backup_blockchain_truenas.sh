@@ -71,6 +71,7 @@ SRC_BASE=""
 DEST_BASE=""
 SRCDIR=""
 DESTDIR=""
+DEST_MACHINE_BASE=""
 CLI_MODE=""
 CLI_SERVICE=""
 CLI_OVERRIDES=()
@@ -326,7 +327,7 @@ vlog "__prebackup__"
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    log "Pre-backup (inside container): $ct"
+    log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
             $SERVICE_GETDATA && get_service_data
@@ -336,13 +337,21 @@ vlog "__prebackup__"
         ;;
         chia)
             $SERVICE_GETDATA && get_service_data
-            # rotate last backup
-            docker exec "$ct" mv /root/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite /root/.chia/mainnet/db/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "command failed"
-            log "Starting Chia database backup (online)"
-            chia db backup >/dev/null 2>&1 || warn "command failed"
-    #reading from blockchain database: /root/.chia/mainnet/db/blockchain_v2_mainnet.sqlite
-    #writing to backup file: /root/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite
-    #Database backup finished : /root/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite
+            log "Fix SSL file permissions"
+            docker exec "$ct" chia init --fix-ssl-permissions
+            log "Starting live database backup"
+            docker exec "$ct" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
+            sync
+
+            local dbbakdir
+            # a set of archives
+            if [ -d "${DEST_MACHINE_BASE}/databases" ]; then dbbakdir=${DEST_MACHINE_BASE}/databases
+            elif [ -d "${DESTDIR}/../../databases/sqlite" ]; then dbbakdir=${DESTDIR}/../../databases/sqlite
+            elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
+            elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
+            fi
+            log "Rotate/archive database backup"
+            mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
         ;;
         *) return 1 ;;
     esac
@@ -499,7 +508,7 @@ vlog "__service_stop_graceful__"
         return 0
     fi
 
-    log "Attempting graceful stop (inside container): $ct"
+    log "Attempting graceful stop. Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
@@ -682,6 +691,7 @@ docker_exec() {
     local ct="${SERVICE_CT_MAP[$service]:-}"
     [[ -n "$ct" ]] || return 1
 
+    log "Dive into the container: $ct"
     docker exec "$ct" "$@" 2>/dev/null
 }
 
@@ -695,6 +705,7 @@ vlog "__get_block_height__"
     [[ -n "$ct" ]] || return 1
     command -v docker >/dev/null 2>&1 || return
 
+    log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
@@ -767,7 +778,8 @@ get_service_data() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
 
-    show "Short service summary:"
+    show "Getting short service summary..."
+    log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
