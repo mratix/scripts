@@ -9,6 +9,9 @@
 # - Es erklärt, wartet, fragt und wiederholt sich
 # - Abbrechen ist jederzeit möglich
 # - Exit wenn der User es will
+#
+# Author: mratix, 1644259+mratix@users.noreply.github.com
+version="260210-initial"
 # ============================================================
 
 # --------------------------
@@ -34,9 +37,9 @@ COINS=0
 # 5 = minimal / technisch
 
 log()  { [ "$USER_LEVEL" -le 3 ] && echo "$@"; }
-log1() { [ "$USER_LEVEL" -le 1 ] && echo "$@"; }
+log1() { [ "$USER_LEVEL" -le 1 ] && echo "$@"; } # Zeile 40: [: : Ganzzahliger Ausdruck erwartet
 log2() { [ "$USER_LEVEL" -le 2 ] && echo "$@"; }
-log3() { [ "$USER_LEVEL" -le 3 ] && echo "$@"; }
+log3() { [ "$USER_LEVEL" -le 3 ] && echo "$@"; } # Zeile 42: [: : Ganzzahliger Ausdruck erwartet
 log4() { [ "$USER_LEVEL" -le 4 ] && echo "$@"; }
 log5() { [ "$USER_LEVEL" -le 5 ] && echo "$@"; }
 
@@ -73,13 +76,13 @@ ask_continue_or_restart() {
   echo "Was möchtest du tun?"
   echo "1) Erneut versuchen"
   echo "2) Script von vorne starten"
-  echo "3) Jetzt beenden"
-  read -rp "Auswahl [1-3]: " _choice
+  echo "0) Jetzt beenden"
+  read -rp "Auswahl [1-2,0]: " _choice
 
   case "$_choice" in
     1) return 0 ;;
     2) restart_script "$@" ;;
-    3) echo "Alles klar. Script beendet."; exit 0 ;;
+    3) echo "Alles klar. Script beendet."; end ;;
     *) echo "Ungültige Auswahl."; ask_continue_or_restart "$@" ;;
   esac
 }
@@ -111,7 +114,7 @@ show_score() {
   echo
   echo "🏁 SESSION ENDE"
   echo "Zeit gebraucht: $((elapsed/60)):$((elapsed%60)) Minuten"
-  echo "Erfahrungspunkte: $COINS Coins" && rot12 "$COINS" >> "$HOME/.backup_blockchain-pacman.rewards"
+  echo "Erfahrungspunkte: $COINS Coins gesammelt." && rot12 "$COINS" >> "$HOME/.backup_blockchain-pacman.rewards"
   echo
 }
 
@@ -128,7 +131,7 @@ select_user_level() {
   echo "Bitte wähle deine Erfahrungsstufe:"
   echo
   echo "1) Absoluter Anfänger (bitte alles erklären und fragen)"
-  echo "2) Ich kann mich anmelden und Anweisungen befolgen"
+  echo "2) Ich kann Anweisungen befolgen"
   echo "3) Ich weiß, was im \$HOME ist und kenne meine Daten"
   echo "4) Ich weiß genau, was ich tue (CLI, Pfade, Risiken)"
   echo
@@ -159,7 +162,7 @@ select_service() {
   echo "3) Chia (XCH)"
   echo "0) keine oder andere"
   echo
-  read -rp "Auswahl [1-3]: " _svc
+  read -rp "Auswahl [1-3,0]: " _svc
 
   case "$_svc" in
     1) SERVICE="btc" ;;
@@ -178,43 +181,43 @@ select_service() {
 
 confirm_service_stopped() {
   log1 "────────────────────────────────────────"
-  log1 "WICHTIGER SCHRITT: Service-Status"
+  log1 "WICHTIGER SCHRITT: Dienst-Status"
   log1 "────────────────────────────────────────"
   log1 "Bevor wir weitermachen, MUSS der betroffene Dienst gestoppt sein."
-  log1 "Wenn er noch läuft, können Daten beschädigt werden oder das Backup ist unbrauchbar."
+  log1 "Wenn er noch läuft, können Daten beschädigt werden oder das Backup wird"
+  log1 "unvollständig und unbrauchbar."
   log1 ""
 
-  log3 "Bitte bestätige, dass der Service '$SERVICE' aktuell NICHT läuft."
+  log3 "Bitte bestätige, dass der Dienst '$SERVICE' aktuell NICHT läuft."
   log5 "Service must be stopped before rsync / snapshot operations."
 
   while true; do
     echo
     echo "Was möchtest du tun?"
-    echo "  j) Ja, der Service ist gestoppt"
-    echo "  n) Nein / Ich bin mir nicht sicher (ich prüfe das jetzt)"
-    echo "  a) Abbrechen"
-    read -rp "Auswahl [j/n/a]: " _ans
+    echo "  j) Ja, der Dienst ist gestoppt"
+    echo "  n) Nein / Ich bin mir nicht sicher, ich prüfe das jetzt"
+    echo "  0) Abbrechen"
+    read -rp "Auswahl [j/n/0]: " _ans
 
     case "$_ans" in
       j|J)
-        log3 "Okay, wir gehen davon aus, dass der Service gestoppt ist."
-        log5 "User confirmed service stopped."
+        log3 "Gut, wir gehen davon aus, dass der Dienst gestoppt ist."
+        log5 "User confirmed service is stopped."
         COINS=$((COINS + 50))
         log1 "👍 Gute Entscheidung! Sicherheit erhöht. (+50 Coins)"
         return 0
         ;;
       n|N)
-        log1 "Kein Problem. Nimm dir Zeit und prüfe den Service in Ruhe."
-        log1 "Ich warte hier auf dich."
+        log1 "Kein Problem. Nimm dir Zeit und prüfe den Dienst in Ruhe. Ich warte so lange."
         log5 "User unsure about service state."
         read -rp "Drücke ENTER, wenn du bereit bist weiterzumachen..."
         ;;
-      a|A)
+      0)
         warn "Abbruch gewählt."
         end
         ;;
       *)
-        warn "Ungültige Eingabe. Bitte j, n oder a wählen."
+        warn "Ungültige Eingabe. Bitte j, n oder 0 wählen."
         ;;
     esac
   done
@@ -438,7 +441,7 @@ suggest_native_datadirs() {
   esac
 
   log1 ""
-  log1 "💡 Tipp: Oft ist es ein versteckter Ordner (beginnt mit .)"
+  log1 "💡 Tipp: Oft ist es ein versteckter Ordner (beginnt mit einem . )"
   pause
 }
 
@@ -449,7 +452,7 @@ check_datadir() {
 
   if [[ -z "${DATADIR:-}" ]]; then
     warn "DATADIR ist nicht gesetzt."
-    log1 "Das ist der Ordner, in dem deine Blockchain-Daten liegen."
+    log1 "Das ist der Ordner, in dem die Blockchain-Daten liegen."
 
     if [[ "$USER_LEVEL" -le 2 ]]; then
       suggest_native_datadirs
@@ -465,11 +468,13 @@ check_datadir() {
       err "Der Pfad existiert nicht."
     elif [[ ! -d "$DATADIR" ]]; then
       err "Der Pfad ist kein Verzeichnis."
-    elif [[ "$DATADIR" == "/" || "$DATADIR" == "/home" || "$DATADIR" == "/usr" || "$DATADIR" == "/mnt" ]]; then
-      err "Dieser Pfad ist zu gefährlich für ein Backup/Restore!"
-      log1 "Das könnte dein gesamtes System betreffen."
+    elif [[ "$DATADIR" == "/" || "$DATADIR" == "/dev" || "$DATADIR" == "/media" || "$DATADIR" == "/mnt" || "$DATADIR" == "/usr" ]]; then
+      err "Dieser Pfad ist gefährlich für ein Backup/Restore!"
+      log1 "Das könnte dein System oder die Daten beschädigen."
+    elif [[ "$DATADIR" == "/home" || "$DATADIR" == "/tmp" ]]; then
+      err "Dieser Pfad ist für ein Backup/Restore ungeeignet!"
     else
-      log3 "DATADIR sieht gültig aus."
+      log3 "DATADIR scheint geeignet zu sein."
       break
     fi
 
@@ -547,14 +552,14 @@ check_zfs() {
 
   case "$fs" in
     zfs)
-      log1 "🎉 Dein DATADIR liegt auf ZFS."
+      log1 "🎉 Dein DATADIR liegt auf einem ZFS-Dateisystem."
       log1 "Snapshots sind möglich – maximale Sicherheit!"
       award_coins 100
       ZFS_AVAILABLE=true
       ;;
     btrfs)
-      log1 "✨ Dein DATADIR liegt auf btrfs."
-      log1 "btrfs kann Subvolume-Snapshots erstellen."
+      log1 "✨ Dein DATADIR liegt auf einem btrfs-Dateisystem."
+      log1 "btrfs kann Subvolume-Schnappschüsse erstellen."
       log1 "Das ist fortgeschrittene Technik – Respekt!"
       award_coins 75
       log1 "💡 Hinweis: btrfs-Snapshots könnten hier später genutzt werden."
@@ -562,8 +567,8 @@ check_zfs() {
       BTRFS_AVAILABLE=true
       ;;
     ext4|ext3|ext2)
-      log1 "ℹ️  Dein DATADIR liegt auf $fs."
-      log1 "Das ist völlig okay und sehr verbreitet."
+      log1 "ℹ️  Dein DATADIR liegt auf einem $fs-Dateisystem."
+      log1 "Das ist völlig in Ordnung und sehr verbreitet."
       log1 "Wenn du irgendwann mehr Sicherheit willst, lohnt sich ein Blick auf ZFS oder btrfs."
       ZFS_AVAILABLE=false
       BTRFS_AVAILABLE=false
@@ -578,9 +583,79 @@ check_zfs() {
   maybe_level_up
   pause
 }
+
+# --------------------------
+# BACKUP (DAU-SAFE)
+# --------------------------
+
+do_backup() {
+  echo
+  echo "🧰 BACKUP-MODUS"
+  log1 "Wir sichern jetzt die Blockchain-Daten."
+
+  # --------------------------
+  # BACKUP-START-ABFRAGE (LEVEL-BASIERT)
+  # --------------------------
+
+  log1 "────────────────────────────────────────"
+  log1 "BACKUP STARTEN?"
+  log1 "────────────────────────────────────────"
+
+  log1 "Was gleich passiert:"
+  log1 "- Deine Blockchain-Daten werden kopiert"
+  log1 "- Es wird nichts gelöscht"
+  log1 "- Falls möglich, werden Sicherheits-Snapshots erstellt"
+
+  log3 "Service: $SERVICE"
+  log3 "DATADIR: $DATADIR"
+  log3 "ZFS verfügbar: ${ZFS_AVAILABLE:-false}"
+  log3 "btrfs verfügbar: ${BTRFS_AVAILABLE:-false}"
+
+  # Default-Antwort je nach Level
+  local default_answer
+  case "$USER_LEVEL" in
+    1|2) default_answer="J" ;;   # Backup schadet nie
+    3)   default_answer="J" ;;
+    4|5) default_answer="n" ;;   # Profis wollen bewusst entscheiden
+  esac
+
+  echo
+  if [[ "$default_answer" == "J" ]]; then
+    read -rp "Möchtest du das Backup jetzt starten? [J/n] " _go
+    _go=${_go:-J}
+  fi
+
+  case "$_go" in
+    j|J)
+      log1 "🚀 Backup startet jetzt..."
+      log3 "Backup confirmed by user."
+
+      # Snapshot vor Backup (falls ZFS)
+      if [[ "${ZFS_AVAILABLE:-false}" == true ]]; then
+        create_snapshot "$DATADIR" "backup"
+      fi
+
+      echo "(Simulation) Daten werden gesichert..."
+      sleep 2
+# ?
+      log1 "✅ Backup erfolgreich abgeschlossen."
+      award_coins 200
+
+      # Snapshot nach Backup
+      if [[ "${ZFS_AVAILABLE:-false}" == true ]]; then
+        create_snapshot "$DATADIR" "post-backup"
+        award_coins 50
+      fi
+      ;;
+    *)
+      log1 "Backup wurde nicht gestartet."
+      log3 "User skipped backup."
+      ;;
+  esac
+
+  pause
   main_menu
 }
-
 
 # --------------------------
 # COMPARE (PLACEHOLDER)
@@ -674,6 +749,18 @@ do_restore() {
 }
 
 # --------------------------
+# COMPARE (PLACEHOLDER)
+# --------------------------
+
+do_compare() {
+  echo
+  echo "🔍 Vergleichsmodus (noch nicht implementiert)"
+  pause
+  award_coins 75
+  main_menu
+}
+
+# --------------------------
 # RESTORE_PRUNE (DAU-SAFE, NUKLEAR)
 # --------------------------
 
@@ -738,9 +825,9 @@ restore_prune() {
 start_screen() {
   clear
   echo ""
-  echo "🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡"
-  echo "🟡   BACKUP BLOCKCHAIN – PAC-MAN EDITION   🟡"
-  echo "🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡"
+  echo "🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡"
+  echo "🟡  BACKUP BLOCKCHAIN - PAC-MAN EDITION   🟡"
+  echo "🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡🟡"
   echo ""
   echo "          🟡<:3(    ₿   ɱ   🌱"
   echo ""
@@ -759,8 +846,8 @@ cat <<'EOF'
    ██╔══██╗   ██║   ██║
    ██████╔╝   ██║   ╚██████╗
    ╚═════╝    ╚═╝    ╚═════╝
-
-        🟡 ᗧ···ᗣ  Pac-Man Backup Edition
+       Blockchain Backup
+       ᗧ···ᗣ······ᗣ····Pac-Man Edition ᗣ·········ᗣ·········ᗣ
 
    Frisst das Chaos. Spuckt die Sicherheit.
    Dein Backup-Spiel beginnt jetzt.
@@ -770,13 +857,19 @@ log1 "Willkommen! Dieses Script schützt dich vor dir selbst 😄"
 log1 "Du kannst hier nichts kaputt machen, außer du willst es wirklich."
 }
 
+end() {
+  show_score
+  echo "👋 Script beendet. Danke fürs Mitmachen!"
+  exit 0
+}
+
 # --------------------------
 # SCRIPT START
 # --------------------------
 
 start_screen
-#show_startscreen
 select_user_level
+show_startscreen
 select_service
 confirm_service_stopped
 check_datadir
