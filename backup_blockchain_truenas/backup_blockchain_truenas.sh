@@ -715,7 +715,7 @@ vlog "__get_block_height__"
             #docker exec "$ct" monero-wallet-cli bc_height # unused
         ;;
         chia)
-            docker exec "$ct" chia show --state 2>/dev/null | awk '/Height:/ {print $2}'
+            docker exec "$ct" chia show --state 2>/dev/null | awk '/Height:/ {print $9}' | head -1
         ;;
         *) return 1 ;;
     esac
