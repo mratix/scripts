@@ -686,16 +686,24 @@ vlog "__get_block_height__"
             return 1
             ;;
     esac
-#  elif [[ "$SERVICE_RUNNING" == false ]]; then
-#    log "Parse blockheight from logfile"
-#    case "$SERVICE" in
-#        bitcoind)
-#            ;;
-#        monerod)
-#            ;;
+  elif [[ "$SERVICE_RUNNING" == false ]]; then
+    log "Parse blockheight from logfile"
+    local service_logfile
+    case "$SERVICE" in
+        bitcoind)
+            service_logfile="${SRCDIR}/debug.log"
+            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep UpdateTip | tail -n1 | awk '/height/ {print $5}' | cut -d '=' -f2
+            ;;
+        monerod)
+            service_logfile="${SRCDIR}/bitmonero.log"
+            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep Synced | tail -n1 | awk '// {print $8}' | cut -d '/' -f1
+            ;;
 #        chia)
+#            service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log"
+#            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile}
 #            ;;
-#    esac
+        *) return 0 ;;
+    esac
   fi
 }
 
