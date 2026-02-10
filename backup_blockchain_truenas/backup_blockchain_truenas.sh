@@ -709,13 +709,16 @@ vlog "__get_block_height__"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
+            return
         ;;
         monerod)
             docker exec "$ct" monerod print_height 2>/dev/null | tail -n1
+            return
             #docker exec "$ct" monero-wallet-cli bc_height # unused
         ;;
         chia)
             docker exec "$ct" chia show --state 2>/dev/null | awk '/Height:/ {print $9}' | head -1
+            return
         ;;
         *) return 1 ;;
     esac
@@ -726,10 +729,12 @@ vlog "__get_block_height__"
         bitcoind)
             service_logfile="${SRCDIR}/debug.log"
             [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep UpdateTip | tail -n1 | awk '/height/ {print $5}' | cut -d '=' -f2
+            return
         ;;
         monerod)
             service_logfile="${SRCDIR}/bitmonero.log"
             [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep Synced | tail -n1 | awk '// {print $8}' | cut -d '/' -f1
+            return
         ;;
 #        chia)
 #            service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log"
