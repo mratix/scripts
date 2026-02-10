@@ -2,7 +2,7 @@
 # ============================================================
 # backup_blockchain_truenas.sh
 # Backup & restore script for blockchain nodes on TrueNAS Scale
-# Gold Release v1.1.5
+# Gold Release v1.1.6
 # Maintenance release: Logic errors elimination, stability, fine-tuning
 #
 # Supported services:
@@ -315,11 +315,40 @@ list_snapshots() {
     fi
 }
 
+
 ########################################
 # Main task
 # Backup (rsync-based, snapshot protected)
 # Restore (interactive, never headless)
 #
+prebackup() {
+vlog "__prebackup__"
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    log "Pre-backup (inside container): $ct"
+    case "$SERVICE" in
+        bitcoind)
+            $SERVICE_GETDATA && get_service_data
+        ;;
+        monerod)
+            $SERVICE_GETDATA && get_service_data
+        ;;
+        chia)
+            $SERVICE_GETDATA && get_service_data
+            # rotate last backup
+            docker exec "$ct" mv /root/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite /root/.chia/mainnet/db/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "command failed"
+            log "Starting Chia database backup (online)"
+            chia db backup >/dev/null 2>&1 || warn "command failed"
+    #reading from blockchain database: /root/.chia/mainnet/db/blockchain_v2_mainnet.sqlite
+    #writing to backup file: /root/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite
+    #Database backup finished : /root/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite
+        ;;
+        *) return 1 ;;
+    esac
+vlog "__prebackup__done"
+}
+
 backup_restore_blockchain() {
 vlog "__backup_restore_blockchain__ start"
 
@@ -338,7 +367,7 @@ vlog "__backup_restore_blockchain__ start"
 case "$rsync_exit" in
       0)
         log "rsync ${MODE} completed successfully"
-        ;;
+      ;;
       23|24)
         warn "rsync ${MODE} completed with warnings code=$rsync_exit; retrying once"
         if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
@@ -350,10 +379,8 @@ case "$rsync_exit" in
             error "rsync ${MODE} failed after retry code=$rsync_exit"
         fi
         log "rsync ${MODE} completed successfully after retry"
-        ;;
-      *)
-        error "rsync failed code=$rsync_exit"
-        ;;
+      ;;
+      *) error "rsync failed code=$rsync_exit" ;;
     esac
 }
 
@@ -444,7 +471,7 @@ service_stop() {
         *)
             warn "Unknown SERVICE_STOP_METHOD=${SERVICE_STOP_METHOD}, falling back to docker"
             service_stop_docker
-            ;;
+        ;;
     esac
 }
 
@@ -476,16 +503,14 @@ vlog "__service_stop_graceful__"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
-            ;;
+        ;;
         monerod)
             docker exec "$ct" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
-            ;;
+        ;;
         chia)
             docker exec "$ct" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
-            ;;
-        *)
-            warn "Graceful stop not defined for service=${SERVICE}"
-            ;;
+        ;;
+        *) warn "Graceful stop not defined for service=${SERVICE}" ;;
     esac
 
     service_stop_docker
@@ -559,8 +584,7 @@ vlog "__rotate_logfile__"
         bitcoind) service_logfile="${SRCDIR}/debug.log" ;;
         monerod) service_logfile="${SRCDIR}/bitmonero.log" ;;
         chia) service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log" ;;
-        #chia) return 0 ;;
-        *) return 0 ;;
+        *) return 1 ;;
     esac
 
     if [[ ! -f "$service_logfile" ]]; then
@@ -674,17 +698,15 @@ vlog "__get_block_height__"
     case "$SERVICE" in
         bitcoind)
             docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
-            ;;
+        ;;
         monerod)
             docker exec "$ct" monerod print_height 2>/dev/null | tail -n1
             #docker exec "$ct" monero-wallet-cli bc_height # unused
-            ;;
+        ;;
         chia)
             docker exec "$ct" chia show --state 2>/dev/null | awk '/Height:/ {print $2}'
-            ;;
-        *)
-            return 1
-            ;;
+        ;;
+        *) return 1 ;;
     esac
   elif [[ "$SERVICE_RUNNING" == false ]]; then
     log "Parse blockheight from logfile"
@@ -693,15 +715,15 @@ vlog "__get_block_height__"
         bitcoind)
             service_logfile="${SRCDIR}/debug.log"
             [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep UpdateTip | tail -n1 | awk '/height/ {print $5}' | cut -d '=' -f2
-            ;;
+        ;;
         monerod)
             service_logfile="${SRCDIR}/bitmonero.log"
             [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep Synced | tail -n1 | awk '// {print $8}' | cut -d '/' -f1
-            ;;
+        ;;
 #        chia)
 #            service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log"
 #            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile}
-#            ;;
+#        ;;
         *) return 0 ;;
     esac
   fi
@@ -750,18 +772,16 @@ get_service_data() {
         bitcoind)
             docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
                 | while IFS= read -r line; do show "$line"; done
-            ;;
+        ;;
         monerod)
             docker exec "$ct" monerod status 2>/dev/null \
                 | while IFS= read -r line; do show "$line"; done
-            ;;
+        ;;
         chia)
             docker exec "$ct" chia show --state 2>/dev/null \
                 | while IFS= read -r line; do show "$line"; done
-            ;;
-        *)
-            return 1
-            ;;
+        ;;
+        *) return 1 ;;
     esac
   fi
 }
@@ -839,16 +859,14 @@ vlog "__telemetry_event__"
   case "$TELEMETRY_BACKEND" in
     none|"")
       return 0
-      ;;
+    ;;
     syslog)
       telemetry_syslog "$level" "$msg" "$source"
-      ;;
+    ;;
     http)
       telemetry_http "$level" "$msg" "$source"
-      ;;
-    *)
-      warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
-      ;;
+    ;;
+    *) warn "Unknown telemetry backend: $TELEMETRY_BACKEND" ;;
   esac
 }
 
@@ -864,10 +882,8 @@ vlog "__send_telemetry__"
 #  --data-binary \
 #  "backup,host=$THIS_HOST,service=$SERVICE mode=\"$MODE\",runtime=$RUNTIME,exit=$EXIT_CODE"
             send_telemetry_influx "$runtime" "$exit" "$src" "$dst"
-            ;;
-        *)
-            warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
-            ;;
+        ;;
+        *) warn "Unknown telemetry backend: $TELEMETRY_BACKEND" ;;
     esac
   fi
 }
@@ -933,7 +949,7 @@ ENABLED=true
 MODE=backup
 DRY_RUN=true
 EOF
-      ;;
+    ;;
     machine)
       cat >"$file" <<'EOF'
 # --- machine.conf ---
@@ -959,7 +975,7 @@ VERBOSE=true                    # enable verbose outputs
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
 EOF
-      ;;
+    ;;
     host)
       cat >"$file" <<'EOF'
 # --- ${host}.conf ---
@@ -970,10 +986,8 @@ EOF
 SERVICE="bitcoind"
 LOGFILE="/var/log/backup_restore_blockchain_truenas.log"
 EOF
-      ;;
-    *)
-      error "Unknown config type: $type"
-      ;;
+    ;;
+    *) error "Unknown config type: $type" ;;
   esac
 vlog "__create_config__ done"
 }
@@ -997,51 +1011,51 @@ vlog "__parse_cli_args__"
   # Iterate over the options
   while true; do
     case "$1" in
-      -m|--mode)
-        MODE="$2"
-        CLI_MODE="$2"
-        shift 2
+        -m|--mode)
+            MODE="$2"
+            CLI_MODE="$2"
+            shift 2
         ;;
-      -s|--service)
-        SERVICE="$2"
-        CLI_SERVICE="$2"
-        shift 2
+        -s|--service)
+            SERVICE="$2"
+            CLI_SERVICE="$2"
+            shift 2
         ;;
-      -g|--getdata)
-        SERVICE_GETDATA=true
-        shift
+        -g|--getdata)
+            SERVICE_GETDATA=true
+            shift
         ;;
-      --verbose)
-        VERBOSE=true
-        SERVICE_GETDATA=true
-        shift
+        --verbose)
+            VERBOSE=true
+            SERVICE_GETDATA=true
+            shift
         ;;
-      --debug)
-        DEBUG=true
-        shift
+        --debug)
+            DEBUG=true
+            shift
         ;;
-      -t|--dry-run)
-        DRY_RUN=true
-        shift
+        -t|--dry-run)
+            DRY_RUN=true
+            shift
         ;;
-      -f|--force)
-        FORCE=true
-        shift
+        -f|--force)
+            FORCE=true
+            shift
         ;;
-      --init-config)
-        INIT_CONFIG=true
-        shift
+        --init-config)
+            INIT_CONFIG=true
+            shift
         ;;
-      --help)
-        usage
-        exit 0
+        --help)
+            usage
+            exit 0
         ;;
-      --)
-        shift
-        break
+        --)
+            shift
+            break
         ;;
-      *)
-        error "Unknown option: $1"
+        *)
+            error "Unknown option: $1"
         ;;
     esac
   done
@@ -1091,12 +1105,12 @@ vlog "__apply_cli_overrides__"
     key="${override%%=*}"
     value="${override#*=}"
     case " ${allowed_vars[*]} " in
-      *" ${key} "*)
-        declare -g "${key}=${value}"
-        log "Overrided setting: ${key}=${value}"
+        *" ${key} "*)
+            declare -g "${key}=${value}"
+            log "Overrided setting: ${key}=${value}"
         ;;
-      *)
-        error "Unknown override variable: ${key}"
+        *)
+            error "Unknown override variable: ${key}"
         ;;
     esac
   done
@@ -1172,10 +1186,6 @@ STATEFILE="${SRCDIR}/$SERVICE.state" # temporary relocated, adapt to your own
 resolve_paths   # from here: SERVICE-folder to path attached
 prepare
 
-if [[ -n "${SERVICE_GETDATA:-}" ]]; then
-  get_service_data
-fi
-
 if $USE_USB; then
   [[ -b "$USB_ID" ]] && DESTDIR="$USB_MOUNT/$DATASET/$SERVICE" || error "USB device not found"
   # mount minimal
@@ -1192,24 +1202,25 @@ case "$MODE" in
         trap 'restore_service' EXIT
         check_service_running || true
         take_snapshot
+        $SERVICE_RUNNING && prebackup
         $SERVICE_STOP_BEFORE && service_stop
         rotate_logfile
         backup_restore_blockchain
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
         $SERVICE_START_AFTER && service_start
         $VERBOSE && list_snapshots
-        ;;
+    ;;
     merge)
         service_stop
         merge_dirs
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
         #$SERVICE_START_AFTER && service_start
         $VERBOSE && list_snapshots
-        ;;
+    ;;
     verify)
         verify_backup_restore || EXIT_CODE=$?
         $VERBOSE && list_snapshots
-        ;;
+    ;;
     restore)
         $FORCE || error "Restore requires --force"
         warn "RESTORE MODE – this will overwrite local data"
@@ -1224,7 +1235,7 @@ case "$MODE" in
         backup_restore_blockchain
         restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
-        ;;
+    ;;
 esac
 
 ########################################
@@ -1242,3 +1253,6 @@ exit "$EXIT_CODE"
 #
 # End
 ########################################
+
+# ============================================================
+
