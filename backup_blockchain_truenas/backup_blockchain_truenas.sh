@@ -577,17 +577,15 @@ restore_service() {
 #
 rotate_logfile() {
 vlog "__rotate_logfile__"
-    local service_logfile
-    local logfile_dir logfile_name logfile_base
-    local rotated_file
-    local suffix=""
-    local was_running
-    local height
-    local today=$(date +%y%m%d)
-
     if [[ "$MODE" != "backup" ]]; then
+        # not backup mode, skip
         return 0
     fi
+
+    local service_logfile logfile_dir logfile_name logfile_base rotated_file
+    local was_running
+    local height_stamp="" suffix=""
+    local today=$(date +%y%m%d)
 
     case "$SERVICE" in
         bitcoind) service_logfile="${SRCDIR}/debug.log" ;;
@@ -614,16 +612,16 @@ vlog "__rotate_logfile__"
     local raw_height
     raw_height="${BLOCK_HEIGHT:-$(get_block_height || true)}"
     BLOCK_HEIGHT="$(normalize_block_height "$raw_height")"
-    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 11111 ]]; then
-        height="_h${BLOCK_HEIGHT}"
+    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 111111 ]]; then
+        height_stamp="_h${BLOCK_HEIGHT}"
     else
-        height=""
+        height_stamp=""
     fi
 
     logfile_dir="$(dirname "$service_logfile")"
     logfile_name="$(basename "$service_logfile")"
     logfile_base="${logfile_name%.*}"
-    rotated_file="${logfile_dir}/${logfile_base}_${today}${height}${suffix}.log"
+    rotated_file="${logfile_dir}/${logfile_base}_${today}${height_stamp}${suffix}.log"
 
     if [[ "${was_running}" == true ]]; then
         cp -u "$service_logfile" "$rotated_file" || warn "Failed to copy log to ${rotated_file}"
