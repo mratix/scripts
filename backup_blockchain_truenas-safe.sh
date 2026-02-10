@@ -1,9 +1,20 @@
 #!/bin/bash
-# backup blockchain to nas, truenas, zfs-datasets
-version="260209-safe by Mr.AtiX"
+# ============================================================
+# backup_blockchain_truenas-safe.sh
+# Backup & restore script for blockchain on TrueNAS Scale (safe version)
+#
+# Supported services:
+#   - bitcoind
+#   - monerod
+#   - electrs
+#   - mempool
+#
+# Author: mratix, 1644259+mratix@users.noreply.github.com
+version="260209-safe"
+# ============================================================
 
 echo "-------------------------------------------------------------------------------"
-echo "Backup blockchain and or services to NAS"
+echo "Backup blockchain and or services to NAS/USB (safe version)"
 
 # --- config
 LOGGER=/usr/bin/logger
@@ -34,6 +45,10 @@ usbdev="/dev/sdf1"
 rsync_opts="-avz -P --update --stats --delete --info=progress2"
 
 
+# --- logger
+log(){ echo "$1"; $LOGGER "$(date ...) $1"; }
+
+
 # --- mount destination
 mount_dest(){
 [ ! -d "$nasmount" ] && mkdir -p $nasmount
@@ -47,20 +62,20 @@ else
     [ -f "$nasmount/$nashostname.dummy" ] && [ -f "$nasmount/dir.dummy" ] && echo "Network share $nasmount is mounted and valid backup storage."
         if [ ! -w "$nasmount/" ]; then
             echo "[ ! ] Error: Destination $nasmount on //$nashost/$nasshare is NOT writable! Exit."
-            $LOGGER "$(date +%y%m%d%H%M%S) ! share $nasmount write permissions deny"
+            log "$(date +%y%m%d%H%M%S) ! share $nasmount write permissions deny"
             destdir=/dev/null
             exit 127
         else
             is_mounted=true
-            $LOGGER "$(date +%y%m%d%H%M%S) share $nasmount mounted, validated"
+            log "$(date +%y%m%d%H%M%S) share $nasmount mounted, validated"
         fi
 fi
 }
 
 
-# --- mount usb drive
+# --- mount usb device
 mount_usb(){
-    # nasmount=/mnt/usb/$nasshare # has previous set
+    # nasmount=/mnt/usb/$nasshare # was set before
     [ ! -d "/mnt/usb" ] && mkdir -p /mnt/usb
     mount | grep /mnt/usb >/dev/null
     [ $? -eq 0 ] || mount $usbdev /mnt/usb
@@ -68,17 +83,17 @@ mount_usb(){
     [ ! -f "$nasmount/usb.dummy" ] && { echo "[ ! ] Error: Mounted disk is not valid and or not prepared as backup storage! Exit."; exit 127; }
         if [ ! -w "$nasmount/" ]; then
             echo "[ ! ] Error: Disk $nasmount is NOT writable! Exit."
-            $LOGGER "$(date +%y%m%d%H%M%S) ! usb $nasmount write permissions deny"
+            log "$(date +%y%m%d%H%M%S) ! usb $nasmount write permissions deny"
             destdir=/dev/null
             exit 127
         fi
     is_mounted=true
     echo "USB disk is (now) mounted and valid backup storage."
-    $LOGGER "$(date +%y%m%d%H%M%S) usb $nasmount mounted, valid"
+    log "$(date +%y%m%d%H%M%S) usb $nasmount mounted, valid"
 }
 
 
-# --- unmount nas share
+# --- unmount destination
 unmount_dest(){
         sync
         df -h | grep $nasshare
@@ -90,38 +105,38 @@ unmount_dest(){
 # --- evaluate environment
 prepare(){
 echo "Script started at $(date +%H:%M:%S)"
-$LOGGER "$(date +%y%m%d%H%M%S) script started"
+log "$(date +%y%m%d%H%M%S) script started"
 
-# evaluate machines
+# machine-dependent
 if [ "$arg1" == "btc" ] && [ "$(hostname -s)" == "deop9020m" ]; then
     is_zfs=true
     service=bitcoind
     is_splitted=false
     pool="tank-deop9020m"
-    $LOGGER "$(date +%y%m%d%H%M%S) host:deop9020m service:$service"
+    log "$(date +%y%m%d%H%M%S) host:deop9020m service:$service"
 elif [ "$arg1" == "btc" ] && [ "$(hostname -s)" == "hpms1" ]; then
     is_zfs=true
     service=bitcoind
     is_splitted=true
     pool="ssd" # todo folder blocks is linked to pool tank
     #pool="tank" # only passed when merged from pool ssd
-    $LOGGER "$(date +%y%m%d%H%M%S) host:hpms1 service=$service"
+    log "$(date +%y%m%d%H%M%S) host:hpms1 service=$service"
 elif [ "$arg1" == "xmr" ] && [ "$(hostname -s)" == "hpms1" ]; then
     is_zfs=true
     service=monerod
     is_splitted=true
     pool="ssd" # folder lmdb is linked from pool tank
     #pool="tank" # only passed when merged from pool ssd
-    $LOGGER "$(date +%y%m%d%H%M%S) host:hpms1 service=$service"
+    log "$(date +%y%m%d%H%M%S) host:hpms1 service=$service"
 else
     echo "[ ! ] Error: Blockchain on this machine not identified. Please define the service(name). Exit."
-    $LOGGER "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
+    log "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
     exit 1
 fi
     dataset=$pool/blockchain
 
 # construct paths
-    nasmount=/mnt/$nashostname/$nasshare # redefine share, recheck is new $nasshare mounted
+    nasmount=/mnt/$nashostname/$nasshare # redefine share, recheck is the new $nasshare mounted
     srcdir=/mnt/$dataset/$service
     destdir=$nasmount/$service
     [[ "$restore" == true ]] && srcdir=/mnt/$dataset/$service
@@ -130,21 +145,20 @@ fi
 # pruned service
     [[ "$prune" == true ]] && destdir=${destdir}-prune
 
-# rsync options, attention for monerod: no -z, no --inplace, no --append
     [ "$service" == "bitcoind" ] && rsync_opts="-avihH -P --fsync --mkpath --stats --delete"
-    #[ "$service" == "monerod" ] && rsync_opts="-a -P --numeric-ids --delete --info=progress2"
-    [ "$service" == "monerod" ] && rsync_opts="-a -P --delete --info=progress2 --no-compress"
+    # attention for monerod/lmdb/data.mdb: no -z, no --inplace, no --append
+    [ "$service" == "monerod" ] && rsync_opts="-a -P --numeric-ids --delete --info=progress2 --no-compress"
     [[ "$restore" == true ]] && rsync_opts="-avz -P --append-verify --info=progress2"
 
 # output results
     echo "------------------------------------------------------------"
     echo "Identified blockchain is $service"
-    $LOGGER "$(date +%y%m%d%H%M%S) blockchain/service=$service"
+    log "$(date +%y%m%d%H%M%S) blockchain/service=$service"
 
     echo "Source path     : ${srcdir}"
     echo "Destination path: ${destdir}"
     echo "------------------------------------------------------------"
-    $LOGGER "$(date +%y%m%d%H%M%S) direction $srcdir > $destdir"
+    log "$(date +%y%m%d%H%M%S) direction $srcdir > $destdir"
 
     read -r -p "Please check paths. (Autostart in 5 seconds will go to mount destination)" -t 5 -n 1 -s
 mount_dest
@@ -153,7 +167,7 @@ mount_dest
 
 # --- pre-tasks, stop service
 prestop(){
-$LOGGER "$(date +%y%m%d%H%M%S) try stop $service"
+log "$(date +%y%m%d%H%M%S) try stop $service"
     [ "$service" == "bitcoind" ] && cli -c 'app chart_release scale release_name='\"${service}-knots\"\ 'scale_options={"replica_count": 0}'
 # error: Namespace chart_release not found
     [ "$service" == "bitcoind" ] && midclt call chart.release.scale "${service}-knots" {"replica_count":0}
@@ -167,16 +181,14 @@ $LOGGER "$(date +%y%m%d%H%M%S) try stop $service"
 echo "Check active service..."
 if [ "$service" == "monerod" ]; then
     # todo parse tail -f bitmonero.log
-    # 2026-02-06 18:59:11.821	[SRV_MAIN]	INFO	global	src/daemon/protocol.h:79Cryptonote protocol stopped successfully
-    echo "No way to check a living $service service."
     echo "Please ensure that the App is or going down."
     echo "The $service service shutdown and flushing cache takes long time."
-    read -r -p "(Wait 20 seconds, or press any key to continue immediately)" -t 20 -n 1 -s
+    read -r -p "(Wait 15 seconds, or press any key to continue immediately)" -t 15 -n 1 -s
     sync
 fi
 
 if [ -f "${srcdir}/$service.pid" ]; then
-    echo "[ ! ] Attention: To ensure a clean start next time, need to STOP the App."
+    echo "[ ! ] Attention: To ensure a clean start next time, we need to STOP the App."
     while true; do
         [ -f "${srcdir}/$service.pid" ] && echo "Wait for process $service to going down..." || { echo "Great, service is now down."; break; }
         echo "loop"
@@ -184,7 +196,7 @@ if [ -f "${srcdir}/$service.pid" ]; then
     done
 fi
 
-# --- service check, last (app hanging bug)
+# --- service check, last (App hanging bug)
 [ ! -f "${srcdir}/$service.pid" ] && echo "[ OK ] Service $service is down." || { echo "[ ! ] Shutdown incomplete - Process is still alive! Exit."; exit 127; }
 [ -f "${srcdir}/.cookie" ] && echo "       Cookie is present." || echo "       Cookie is gone."
 [ -f "${srcdir}/anchors.dat" ] && echo "[ OK ] Safe anchors found." || echo "[ ! ] Safe anchors are lost in the deep."
@@ -192,18 +204,40 @@ echo "------------------------------------------------------------"
 }
 
 
-# --- compare src dest times, %y=readable, %Y=unix timestamp
-compare(){
-if [ "$service" == "bitcoind" ]; then
-    srcsynctime=$(stat -c %Y ${srcdir}/chainstate/MANIFEST-*)
-    destsynctime=$(stat -c %Y ${destdir}/chainstate/MANIFEST-*)
-elif [ "$service" == "monerod" ]; then
-    srcsynctime=$(stat -c %Y ${srcdir}/lmdb/data.mdb)
-    destsynctime=$(stat -c %Y ${destdir}/lmdb/data.mdb)
-fi
+latest_manifest() {
+    # Take only the latest MANIFEST file
+    ls -1t "$1"/chainstate/MANIFEST-* 2>/dev/null | head -n1
+}
+
+# --- compare src-dest times
+compare() {
+    if [ "$service" = "bitcoind" ]; then
+        srcfile=$(latest_manifest "$srcdir")
+        destfile=$(latest_manifest "$destdir")
+    elif [ "$service" = "monerod" ]; then
+        srcfile="$srcdir/lmdb/data.mdb"
+        destfile="$destdir/lmdb/data.mdb"
+    fi
+
+    if [ ! -f "$srcfile" ] || [ ! -f "$destfile" ]; then
+        echo "[ ! ] One or more files do not exist."
+        exit 1
+    fi
+
+    srcsynctime=$(stat -c %Y "$srcfile")
+    destsynctime=$(stat -c %Y "$destfile")
+
     echo "------------------------------------------------------------"
-    echo "Last backup on remote is from     : $destsynctime unix time"
-    echo "Last working on local is from     : $srcsynctime unix time"
+    echo "Remote backup : $(date -d "@$destsynctime")"
+    echo "Local data    : $(date -d "@$srcsynctime")"
+    if (( destsynctime > srcsynctime )); then
+        echo "Attention: Remote backup is newer than local data."
+    fi
+    if [ "$destfile" -nt "$srcfile" ]; then
+        return 1    # backup newer
+    else
+        return 0    # local newer or equal
+    fi
 }
 
 
@@ -211,7 +245,14 @@ fi
 prebackup(){
 cd $srcdir
 
-if [ "$height" -lt 111111 ]; then
+compare
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "Remote holds newer data. Prevent overwrite, stopping."
+    exit 1
+fi
+
+if [[ "$height" -lt 111111 ]]; then
     # bitcoind
     [ -f ${srcdir}/debug.log ] && tail -n20 debug.log | grep UpdateTip
     # todo parse height from log
@@ -219,15 +260,13 @@ if [ "$height" -lt 111111 ]; then
     # monerod
     [ -f ${srcdir}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
     # todo parse height from log
-    # Synced 3372528/3604263 (93%, 231735 left, 0% of total synced, estimated 5.9 days left)
 
     # electrs
     [ -f ${srcdir}/db/bitcoin/LOG ] && tail -n20 ${srcdir}/db/bitcoin/LOG
     # todo parse height from log
 
-    compare
-    echo "Remote backuped heights found     : $(ls -m ${destdir}/h* | sed -e 's/\..*$//')"
-    echo "Local working height is           : $(ls -m ${srcdir}/h* | sed -e 's/\..*$//')"
+    echo "Remote backuped heights found     : $(ls ${destdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
+    echo "Local working height is           : $(ls ${srcdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
     echo "------------------------------------------------------------"
     read -p "[ ? ] Set new Blockchain height   : h" height
 fi
@@ -240,7 +279,7 @@ echo "Rotate log file started at $(date +%H:%M:%S)"
     [ -f ${srcdir}/debug.log ] && mv -u debug.log debug_h$height.log
     [ -f ${srcdir}/bitmonero.log ] && mv -u bitmonero.log bitmonero_h$height.log
     [ -f ${srcdir}/db/bitcoin/LOG ] && mv -u ${srcdir}/electrs_h$height.log
-    [ -f ${srcdir}/db/bitcoin/LOG.old* ] && rm ${srcdir}/db/bitcoin/LOG.old*
+    find ${srcdir}/db/bitcoin/LOG.old* -type f -exec rm {} \;
 }
 
 
@@ -255,16 +294,7 @@ if [ "$is_zfs" ]; then
     snapname="script-$(date +%Y-%m-%d_%H-%M)"
     zfs snapshot -r ${dataset}@${snapname}
     echo "[ OK] Snapshot '$snapname' was taken."
-    $LOGGER "$(date +%y%m%d%H%M%S) snapshot $snapname taken"
-
-    # replicate snapshot, send task to background
-    #echo "Snapshot replication $snapname to hpms1 scheduled."
-    #snapreparch="tank/backups/replica/$HOSTNAME/$nasshare/$service"
-    # local or remote archive
-    #[ "$(hostname -s)" == "hpms1" ] && snaprepcmd='"zfs receive $snapreparch"' || snaprepcmd='ssh hpms1 "zfs receive $snapreparch"'
-    #$LOGGER "$(date +%y%m%d%H%M%S) snapshot send replica hpms1"
-    # zfs send -I ${dataset}@previous ${dataset}@latest | ${snaprepcmd} &&
-    # todo include recursive datasets
+    log "$(date +%y%m%d%H%M%S) snapshot $snapname taken"
 fi
 }
 
@@ -275,23 +305,28 @@ cd $srcdir
 
 echo ""
 echo "Main task started at $(date +%H:%M:%S)"
-$LOGGER "$(date +%y%m%d%H%M%S) start task backup pre"
+log "$(date +%y%m%d%H%M%S) start task backup pre"
 
-# prevent overwrite newer destination
+# Ensure both timestamps are valid numbers
+if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
+    echo "[ ! ] Error: One of the timestamps is missing or invalid."
+    exit 1
+fi
+
+# Prevent overwrite if destination is newer (and no force flag set)
 if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$force" ]; then
-# error [: : integer expression expected
-    echo "[ ! ] Destination is newer (and maybe higher) as the source."
+    echo "[ ! ] Destination is newer (and maybe higher) than the source."
     echo "      Better use restore. A force will ignore this situation. End."
-    $LOGGER "$(date +%y%m%d%H%M%S) ! src-dest comparing triggers abort"
+    log "$(date +%y%m%d%H%M%S) ! src-dest comparing triggers abort"
     exit 1
 elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$force" ]; then
-    echo "[ ! ] Destination is newer as the source."
+    echo "[ ! ] Destination is newer than the source."
     echo "      Force will now overwrite it. This will downgrade the destination."
-    $LOGGER "$(date +%y%m%d%H%M%S) src-dest downgrade forced"
+    log "$(date +%y%m%d%H%M%S) src-dest downgrade forced"
 fi
 
     # machine deop9020m/hpms1
-    [ "$service" == "bitcoind" ] && cp -u anchors.dat banlist.json debug*.log fee_estimates.dat h* mempool.dat peers.dat ${destdir}/
+    [ "$service" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h* mempool.dat peers.dat" ${destdir}/
     [ "$service" == "bitcoind" ] && cp -u bitcoin.conf ${destdir}/bitcoin.conf.$HOSTNAME
     [ "$service" == "bitcoind" ] && cp -u settings.json ${destdir}/settings.json.$HOSTNAME
     [ "$service" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
@@ -305,18 +340,18 @@ i=1
 while [ "${folder[i]}" != "" ]; do
     echo "------------------------------------------------------------"
     echo "Start backup job: $service/${folder[i]}"
-    $LOGGER "$(date +%y%m%d%H%M%S) start task backup main"
+    log "$(date +%y%m%d%H%M%S) start task backup main"
     ionice -c 2 \
     rsync \
         ${rsync_opts} \
         --exclude '.nobakup' \
         ${srcdir}/${folder[i]}/ ${destdir}/${folder[i]}/
-    [ $? -ne 0 ] && echo "[ ! ] Errors during backup ${destdir}/${folder[i]}." && $LOGGER "$(date +%y%m%d%H%M%S) ! task backup ${folder[i]} fail"
+    [ $? -ne 0 ] && echo "[ ! ] Errors during backup ${destdir}/${folder[i]}." && log "$(date +%y%m%d%H%M%S) ! task backup ${folder[i]} fail"
     sync
     ((i++))
 done
 echo "------------------------------------------------------------"
-$LOGGER "$(date +%y%m%d%H%M%S) end task backup main"
+log "$(date +%y%m%d%H%M%S) end task backup main"
 }
 
 
@@ -340,7 +375,7 @@ fi
 echo "Script ended at $(date +%H:%M:%S)"
 echo "End."
 echo "------------------------------------------------------------"
-$LOGGER "$(date +%y%m%d%H%M%S) script end"
+log "$(date +%y%m%d%H%M%S) script end"
 }
 
 
@@ -384,7 +419,7 @@ case "$1" in
             echo "------------------------------------------------------------"
             echo "RESTORE: Attention, the direction Source <-> Destination is now changed."
             restore=true
-            $LOGGER "$(date +%y%m%d%H%M%S) direction is restore"
+            log "$(date +%y%m%d%H%M%S) direction is restore"
             prepare
             prestop
             backup_blockchain
@@ -394,14 +429,14 @@ case "$1" in
         force|--force)
             force=true
             echo "[ i ] Force is set."
-            $LOGGER "$(date +%y%m%d%H%M%S) force is set"
+            log "$(date +%y%m%d%H%M%S) force is set"
         ;;
         debug|--debug)
             debug=true
             LOGGER=/usr/bin/logger
 	    set -x
             echo "[ i ] Debug is enabled."
-            $LOGGER "$(date +%y%m%d%H%M%S) debug now enabled"
+            log "$(date +%y%m%d%H%M%S) debug now enabled"
         ;;
         all|-a|full|--full)
             force=false
