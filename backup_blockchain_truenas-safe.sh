@@ -6,6 +6,7 @@
 # Supported services:
 #   - bitcoind
 #   - monerod
+#   - chia
 #   - electrs
 #   - mempool
 #
@@ -33,7 +34,7 @@ is_mounted=false
 use_usb=false
 prune=false
 force=false
-debug=false
+verbose=false
 height=0
 is_zfs=false
 is_splitted=false
@@ -41,12 +42,12 @@ pool=""
 dataset=""
 srcdir=""
 destdir=""
+folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
 usbdev="/dev/sdf1"
 rsync_opts="-avz -P --update --stats --delete --info=progress2"
 
-
 # --- logger
-log(){ echo "$1"; $LOGGER "$(date ...) $1"; }
+log(){ echo "$1"; $LOGGER "$(date +%y%m%d%H%M%S) $1"; }
 
 
 # --- mount destination
@@ -128,6 +129,13 @@ elif [ "$arg1" == "xmr" ] && [ "$(hostname -s)" == "hpms1" ]; then
     pool="ssd" # folder lmdb is linked from pool tank
     #pool="tank" # only passed when merged from pool ssd
     log "$(date +%y%m%d%H%M%S) host:hpms1 service=$service"
+elif [ "$arg1" == "xch" ] && [ "$(hostname -s)" == "hpms1" ]; then
+    is_zfs=true
+    service=chia
+    is_splitted=true
+    pool="ssd" # folder plots is linked to pool tank
+    #pool="tank" # only passed when merged from pool ssd
+    log "$(date +%y%m%d%H%M%S) host:hpms1 service=$service"
 else
     echo "[ ! ] Error: Blockchain on this machine not identified. Please define the service(name). Exit."
     log "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
@@ -167,25 +175,18 @@ mount_dest
 
 # --- pre-tasks, stop service
 prestop(){
-log "$(date +%y%m%d%H%M%S) try stop $service"
-    [ "$service" == "bitcoind" ] && cli -c 'app chart_release scale release_name='\"${service}-knots\"\ 'scale_options={"replica_count": 0}'
-# error: Namespace chart_release not found
-    [ "$service" == "bitcoind" ] && midclt call chart.release.scale "${service}-knots" {"replica_count":0}
-# error: Method does not exist
-
-    [ "$service" == "monerod" ] && cli -c 'app chart_release scale release_name='\"${service}\"\ 'scale_options={"replica_count": 0}'
-# error: Namespace chart_release not found
-    [ "$service" == "monerod" ] && midclt call chart.release.scale '${service}' '{"replica_count":0}'
-# error: Method does not exist
+# disabled - don't works #
+#log "$(date +%y%m%d%H%M%S) try stop $service"
+#    [ "$service" == "bitcoind" ] && cli -c 'app chart_release scale release_name='\"${service}-knots\"\ 'scale_options={"replica_count": 0}'
+#    [ "$service" == "bitcoind" ] && midclt call chart.release.scale "${service}-knots" {"replica_count":0}
+# disabled - don't works #
 
 echo "Check active service..."
-if [ "$service" == "monerod" ]; then
-    # todo parse tail -f bitmonero.log
+
     echo "Please ensure that the App is or going down."
     echo "The $service service shutdown and flushing cache takes long time."
     read -r -p "(Wait 15 seconds, or press any key to continue immediately)" -t 15 -n 1 -s
     sync
-fi
 
 if [ -f "${srcdir}/$service.pid" ]; then
     echo "[ ! ] Attention: To ensure a clean start next time, we need to STOP the App."
@@ -197,9 +198,7 @@ if [ -f "${srcdir}/$service.pid" ]; then
 fi
 
 # --- service check, last (App hanging bug)
-[ ! -f "${srcdir}/$service.pid" ] && echo "[ OK ] Service $service is down." || { echo "[ ! ] Shutdown incomplete - Process is still alive! Exit."; exit 127; }
-[ -f "${srcdir}/.cookie" ] && echo "       Cookie is present." || echo "       Cookie is gone."
-[ -f "${srcdir}/anchors.dat" ] && echo "[ OK ] Safe anchors found." || echo "[ ! ] Safe anchors are lost in the deep."
+[ ! -f "${srcdir}/$service.pid" ] && echo "[ OK ] Service $service is down." || { echo "[ ! ] Shutdown incomplete - Process is still alive! Exit."; exit 1; }
 echo "------------------------------------------------------------"
 }
 
@@ -217,11 +216,9 @@ compare() {
     elif [ "$service" = "monerod" ]; then
         srcfile="$srcdir/lmdb/data.mdb"
         destfile="$destdir/lmdb/data.mdb"
-    fi
-
-    if [ ! -f "$srcfile" ] || [ ! -f "$destfile" ]; then
-        echo "[ ! ] One or more files do not exist."
-        exit 1
+    elif [ "$service" = "chia" ]; then
+        srcfile="$srcdir/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
+        destfile="$destdir/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
     fi
 
     srcsynctime=$(stat -c %Y "$srcfile")
@@ -261,9 +258,13 @@ if [[ "$height" -lt 111111 ]]; then
     [ -f ${srcdir}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
     # todo parse height from log
 
+    # chia
+    # no height in log
+    #[ -f ${srcdir}/.chia/mainnet/log/debug.log ] && tail -n20 ${srcdir}/.chia/mainnet/log/debug.log | grep ...
+
     # electrs
     [ -f ${srcdir}/db/bitcoin/LOG ] && tail -n20 ${srcdir}/db/bitcoin/LOG
-    # todo parse height from log
+    # todo use height from bitcoind
 
     echo "Remote backuped heights found     : $(ls ${destdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
     echo "Local working height is           : $(ls ${srcdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
@@ -274,10 +275,12 @@ fi
 
 echo ""
 echo "Rotate log file started at $(date +%H:%M:%S)"
-    cd $srcdir
+    cd ${srcdir}
     mv -u ${srcdir}/h* ${srcdir}/h$height
-    [ -f ${srcdir}/debug.log ] && mv -u debug.log debug_h$height.log
-    [ -f ${srcdir}/bitmonero.log ] && mv -u bitmonero.log bitmonero_h$height.log
+    [ -f ${srcdir}/debug.log ] && mv -u ${srcdir}/debug.log ${srcdir}/debug_h$height.log
+    [ -f ${srcdir}/bitmonero.log ] && mv -u ${srcdir}/bitmonero.log ${srcdir}/bitmonero_h$height.log
+    [ -f ${srcdir}/.chia/mainnet/log/debug.log ] && cp -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
+    [ -f ${srcdir}/.chia/mainnet/log/debug.log ] && mv -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/chia/mainnet/log/debug_h$height.log
     [ -f ${srcdir}/db/bitcoin/LOG ] && mv -u ${srcdir}/electrs_h$height.log
     find ${srcdir}/db/bitcoin/LOG.old* -type f -exec rm {} \;
 }
@@ -335,6 +338,7 @@ fi
     # machine hpms1
     [ "$service" == "monerod" ] && cp -u bitmonero*.log h* p2pstate.* rpc_ssl.* ${destdir}/
     [ "$service" == "monerod" ] && folder[1]="lmdb"
+    [ "$service" == "chia" ] && { folder[1]=".chia"; folder[2]=".chia_keys"; folder[3]="plots"; }
 
 i=1
 while [ "${folder[i]}" != "" ]; do
@@ -360,11 +364,10 @@ postbackup(){
 if [[ "$restore" == false ]]; then
     chown -R apps:apps ${srcdir}
     echo ""
-    echo "Restart service $service..."
-    [ "$service" == "bitcoind" ] && midclt call chart.release.scale '${service}-knots' '{"replica_count":1}'
-#error: Method does not exist
-    [ "$service" == "monerod" ] && midclt call chart.release.scale '${service}' '{"replica_count":1}'
-#error: Method does not exist
+# disabled - don't works #
+#    echo "Restart service $service..."
+#    [ "$service" == "bitcoind" ] && midclt call chart.release.scale '${service}-knots' '{"replica_count":1}'
+# disabled - don't works #
 else
     chown -R apps ${destdir}
         # no service start after restore
@@ -382,7 +385,7 @@ log "$(date +%y%m%d%H%M%S) script end"
 # --- main logic
 
 # not args given
-[ $# -eq 0 ] && { echo "Arguments needed: btc|xmr|electrs|<servicename> <height>|config|all|restore|debug|force|mount|umount"; exit 1; }
+[ $# -eq 0 ] && { echo "Arguments needed: btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|debug|force|mount|umount"; exit 1; }
 
 # parse arguments (not parameters)
 if [[ -n $4 ]]; then arg4=$4; fi
@@ -391,21 +394,22 @@ if [[ -n $2 ]]; then arg2=$2; fi
 if [[ -n $1 ]]; then arg1=$1; fi
 # feed variables logic
 [ "$arg1" == "force" ] || [ "$arg2" == "force" ] || [ "$arg3" == "force" ] && force=true
-[ "$arg1" == "debug" ] || [ "$arg2" == "debug" ] || [ "$arg3" == "debug" ] && debug=true
+[ "$arg1" == "verbose" ] || [ "$arg2" == "verbose" ] || [ "$arg3" == "verbose" ] && verbose=true
 [ "$arg1" == "btc" ] || [ "$arg2" == "btc" ] || [ "$arg3" == "btc" ] && service=bitcoind
 [ "$arg1" == "xmr" ] || [ "$arg2" == "xmr" ] || [ "$arg3" == "xmr" ] && service=monerod
+[ "$arg1" == "xch" ] || [ "$arg2" == "xch" ] || [ "$arg3" == "xch" ] && service=chia
 # todo check plausibility: is $arg{1-3} a 6-digit number, then set it as $height for service=bitcoind
 # todo check plausibility: is $arg{1-3} a 7-digit number, then set it as $height for service=monerod
 [ "$arg2" == "prune" ] || [ "$arg3" == "prune" ] && prune=true
 [ "$arg2" == "usb" ] || [ "$arg3" == "usb" ] && use_usb=true
 
 case "$1" in
-        btc|bitcoind|xmr|monerod)
+        btc|bitcoind|xmr|monerod|xch|chia)
             # default case
             [ -z "$height" ] && height=0 # preset
             [ -n "$arg2" ] && height=$2 # todo check for numeric format
             [[ "$use_usb" == true ]] && nasmount=/mnt/usb/$nasshare
-            [ "$debug" ] && echo "debug 1:$arg1 2:$arg2 3:$arg3 4:$arg4 s:$service h:$height"
+            [ "$verbose" ] && echo "verbose 1:$arg1 2:$arg2 3:$arg3 4:$arg4 s:$service h:$height"
             prepare
             prestop	# service stop
             prebackup
@@ -431,16 +435,16 @@ case "$1" in
             echo "[ i ] Force is set."
             log "$(date +%y%m%d%H%M%S) force is set"
         ;;
-        debug|--debug)
-            debug=true
+        verbose|--verbose)
+            verbose=true
             LOGGER=/usr/bin/logger
 	    set -x
             echo "[ i ] Debug is enabled."
-            log "$(date +%y%m%d%H%M%S) debug now enabled"
+            log "$(date +%y%m%d%H%M%S) verbose now enabled"
         ;;
         all|-a|full|--full)
             force=false
-            debug=false
+            verbose=false
             restore=false
 		# todo schleife loop services
 	    prepare
@@ -455,7 +459,7 @@ case "$1" in
             unmount_dest
         ;;
         help|--help)
-            echo "Usage: $0 btc|xmr|electrs|<servicename> <height>|config|all|restore|debug|force|mount|umount"
+            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
             exit 1
         ;;
         ver|version|--version)
@@ -466,8 +470,8 @@ case "$1" in
             # undefinied case, try as service
             echo "Undefinied case. Try '$1' as service..."
             service=$1
-            debug=true
-            #{ echo "Usage: $0 btc|xmr|electrs|<servicename> <height>|config|all|restore|debug|force|mount|umount"; exit 1; }
+            verbose=true
+            #{ echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"; exit 1; }
 esac
 # --- main logic end
 exit
