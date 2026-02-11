@@ -373,18 +373,6 @@ vlog "__prebackup__"
                 fi
                 log "Moving backup away to archive $dbbakdir"
                 mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
-            warn "Fix SSL file permissions"
-            docker_exec "$SERVICE" chia init --fix-ssl-permissions
-            log "Starting live database backup... (takes long, 15mins+)"
-            docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
-            sync
-
-            local dbbakdir
-            # a set of archives
-            if [ -d "${DEST_MACHINE_BASE}/databases" ]; then dbbakdir=${DEST_MACHINE_BASE}/databases
-            elif [ -d "${DESTDIR}/../../databases/sqlite" ]; then dbbakdir=${DESTDIR}/../../databases/sqlite
-            elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
-            elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
             fi
         ;;
         *) return 1 ;;
@@ -917,7 +905,6 @@ telemetry_run_end() {
     esac
 }
 
-
 telemetry_http() {
     curl -fsS -XPOST "$INFLUX_URL" \
         --data-binary \
@@ -925,13 +912,11 @@ telemetry_http() {
 runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_HEIGHT}"
 }
 
-
 telemetry_syslog() {
     /usr/bin/logger -t backup_restore_blockchain \
       "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
 snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
 }
-
 
 telemetry_none() {
   return 0
