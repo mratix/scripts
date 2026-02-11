@@ -338,9 +338,9 @@ vlog "__prebackup__"
         chia)
             $SERVICE_GETDATA && get_service_data
             log "Fix SSL file permissions"
-            docker exec "$ct" chia init --fix-ssl-permissions
+            docker_exec "$SERVICE" chia init --fix-ssl-permissions
             log "Starting live database backup... (takes long, 15mins+)"
-            docker exec "$ct" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
+            docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
             sync
 
             local dbbakdir
@@ -511,13 +511,13 @@ vlog "__service_stop_graceful__"
     log "Attempting graceful stop. Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
-            docker exec "$ct" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
+            docker_exec "$SERVICE" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
         ;;
         monerod)
-            docker exec "$ct" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
+            docker_exec "$SERVICE" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
         ;;
         chia)
-            docker exec "$ct" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
+            docker_exec "$SERVICE" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
         ;;
         *) warn "Graceful stop not defined for service=${SERVICE}" ;;
     esac
@@ -610,7 +610,11 @@ vlog "__rotate_logfile__"
     fi
 
     local raw_height
-    raw_height="${BLOCK_HEIGHT:-$(get_block_height || true)}"
+    if [[ -n "${BLOCK_HEIGHT:-}" && "${BLOCK_HEIGHT}" =~ ^[0-9]+$ ]]; then
+        raw_height="$BLOCK_HEIGHT"
+    else
+        raw_height="$(get_block_height || true)"
+    fi
     BLOCK_HEIGHT="$(normalize_block_height "$raw_height")"
     if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 111111 ]]; then
         height_stamp="_h${BLOCK_HEIGHT}"
@@ -695,57 +699,54 @@ docker_exec() {
 
 get_block_height() {
 vlog "__get_block_height__"
-  check_service_running
-  if [[ "$SERVICE_RUNNING" == true ]]; then
-    log "Get blockheight from running service"
-    local ct
-    ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
-    [[ -n "$ct" ]] || return 1
-    command -v docker >/dev/null 2>&1 || return
+    check_service_running || true
 
-    log "Dive into the container: $ct"
-    case "$SERVICE" in
-        bitcoind)
-            docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
-            return
-        ;;
-        monerod)
-            docker exec "$ct" monerod print_height 2>/dev/null | tail -n1
-            return
-            #docker exec "$ct" monero-wallet-cli bc_height # unused
-        ;;
-        chia)
-            docker exec "$ct" chia show --state 2>/dev/null | awk '/Height:/ {print $9}' | head -1
-            return
-        ;;
-        *) return 1 ;;
-    esac
-  elif [[ "$SERVICE_RUNNING" == false ]]; then
-    log "Parse blockheight from logfile"
-    local service_logfile
-    case "$SERVICE" in
-        bitcoind)
-            service_logfile="${SRCDIR}/debug.log"
-            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep UpdateTip | tail -n1 | awk '/height/ {print $5}' | cut -d '=' -f2
-            return
-        ;;
-        monerod)
-            service_logfile="${SRCDIR}/bitmonero.log"
-            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile} | grep Synced | tail -n1 | awk '// {print $8}' | cut -d '/' -f1
-            return
-        ;;
-#        chia)
-#            service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log"
-#            [ -f "${service_logfile}" ] && tail -n30 ${service_logfile}
-#        ;;
-        *) return 0 ;;
-    esac
-  fi
+    if [[ "$SERVICE_RUNNING" == true ]]; then
+        log "Get blockheight from running service"
+        case "$SERVICE" in
+            bitcoind)
+                docker_exec "$SERVICE" bitcoin-cli getblockcount | sed -nE 's/^([0-9]+)$/\1/p' | head -n1
+                return
+            ;;
+            monerod)
+                docker_exec "$SERVICE" monerod print_height | sed -nE 's/.*([0-9]+).*/\1/p' | head -n1
+                return
+            ;;
+            chia)
+                docker_exec "$SERVICE" chia show --state | sed -nE 's/.*Height:[[:space:]]*([0-9]+).*/\1/p' | head -n1
+                return
+            ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    if [[ "$SERVICE_RUNNING" == false ]]; then
+        log "Parse blockheight from logfile"
+        local service_logfile
+        case "$SERVICE" in
+            bitcoind)
+                service_logfile="${SRCDIR}/debug.log"
+                [ -f "${service_logfile}" ] && tail -n50 "$service_logfile" | sed -nE 's/.*height=([0-9]+).*/\1/p' | tail -n1
+                return
+            ;;
+            monerod)
+                service_logfile="${SRCDIR}/bitmonero.log"
+                [ -f "${service_logfile}" ] && tail -n50 "$service_logfile" | sed -nE 's/.*Synced[[:space:]]+([0-9]+)\/.*/\1/p' | tail -n1
+                return
+            ;;
+            chia)
+                service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log"
+                [ -f "${service_logfile}" ] && tail -n100 "$service_logfile" | sed -nE 's/.*(height|Height)[= :]+([0-9]+).*/\2/p' | tail -n1
+                return
+            ;;
+            *) return 0 ;;
+        esac
+    fi
 }
 
 normalize_block_height() {
-  local value="$1"
-  awk 'match($0, /[0-9]+/) {print substr($0, RSTART, RLENGTH); exit}' <<<"$value"
+    local value="$1"
+    sed -nE 's/^([0-9]+)$/\1/p' <<<"${value}" | head -n1
 }
 
 check_service_running() {
@@ -785,15 +786,15 @@ get_service_data() {
     log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
-            docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
+            docker_exec "$SERVICE" bitcoin-cli -getinfo -color=auto \
                 | while IFS= read -r line; do show "$line"; done
         ;;
         monerod)
-            docker exec "$ct" monerod status 2>/dev/null \
+            docker_exec "$SERVICE" monerod status \
                 | while IFS= read -r line; do show "$line"; done
         ;;
         chia)
-            docker exec "$ct" chia show --state 2>/dev/null \
+            docker_exec "$SERVICE" chia show --state \
                 | while IFS= read -r line; do show "$line"; done
         ;;
         *) return 1 ;;
@@ -1270,4 +1271,3 @@ exit "$EXIT_CODE"
 ########################################
 
 # ============================================================
-
