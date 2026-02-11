@@ -135,6 +135,12 @@ set_statefile() {
   fi
 }
 
+get_statefile_value() {
+    local key="$1"
+    [[ -n "${STATEFILE:-}" && -f "$STATEFILE" ]] || return 0
+    sed -nE "s/^${key}=(.*)$/\1/p" "$STATEFILE" | tail -n1
+}
+
 ########################################
 # Config handling
 # Rules:
@@ -609,13 +615,7 @@ vlog "__rotate_logfile__"
         suffix="-unclean"
     fi
 
-    local raw_height
-    if [[ -n "${BLOCK_HEIGHT:-}" && "${BLOCK_HEIGHT}" =~ ^[0-9]+$ ]]; then
-        raw_height="$BLOCK_HEIGHT"
-    else
-        raw_height="$(get_block_height || true)"
-    fi
-    BLOCK_HEIGHT="$(normalize_block_height "$raw_height")"
+    BLOCK_HEIGHT="$(resolve_block_height "${BLOCK_HEIGHT:-}")"
     if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 111111 ]]; then
         height_stamp="_h${BLOCK_HEIGHT}"
     else
@@ -749,6 +749,49 @@ normalize_block_height() {
     sed -nE 's/^([0-9]+)$/\1/p' <<<"${value}" | head -n1
 }
 
+resolve_block_height() {
+    local override_height="$1"
+    local source=""
+    local raw_height=""
+    local normalized_height=""
+    local fallback_height=""
+
+    if [[ -n "${override_height:-}" ]]; then
+        normalized_height="$(normalize_block_height "$override_height")"
+        if [[ -n "$normalized_height" ]]; then
+            source="override"
+            raw_height="$override_height"
+        else
+            warn "BLOCK_HEIGHT override is not numeric: '${override_height}'"
+        fi
+    fi
+
+    if [[ -z "$source" ]]; then
+        raw_height="$(get_block_height || true)"
+        normalized_height="$(normalize_block_height "$raw_height")"
+        if [[ -n "$normalized_height" ]]; then
+            source="service_or_log"
+        fi
+    fi
+
+    if [[ -z "$source" ]]; then
+        fallback_height="$(normalize_block_height "$(get_statefile_value block_height || true)")"
+        if [[ -n "$fallback_height" ]]; then
+            normalized_height="$fallback_height"
+            source="statefile"
+            warn "Blockheight source invalid/unavailable, fallback to statefile: ${normalized_height}"
+        fi
+    fi
+
+    if [[ -z "$source" ]]; then
+        source="unavailable"
+        warn "No numeric blockheight could be resolved"
+    fi
+
+    log "Resolved blockheight source=${source} raw='${raw_height:-${override_height:-}}' normalized='${normalized_height:-}'"
+    printf '%s' "$normalized_height"
+}
+
 check_service_running() {
     local ct
     ct="${SERVICE_CT_MAP[$SERVICE]:-}"
@@ -825,7 +868,7 @@ vlog "__collect_metrics__"
 
     METRIC_SERVICE="$SERVICE"
     METRIC_MODE="$MODE"
-    METRIC_BLOCK_HEIGHT="$(normalize_block_height "$(get_block_height || true)")"
+    METRIC_BLOCK_HEIGHT="$(resolve_block_height "")"
 
     set_statefile block_height "$METRIC_BLOCK_HEIGHT"
     set_statefile snapshot_count "$METRIC_SNAPSHOT_COUNT"
