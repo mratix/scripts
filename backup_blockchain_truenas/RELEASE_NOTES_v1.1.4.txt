@@ -1,0 +1,13 @@
+## v1.1.4 – Documentation & Community Standards Release
+
+### Added
+- Community standards files (LICENSE, CODE_OF_CONDUCT, CONTRIBUTING, SECURITY, SUPPORT)
+- GitHub issue and pull request templates
+
+### Changed
+- README and README.short refreshed to reflect the current release version
+- Release notes updated to document the current state
+
+### Notes
+- No functional script changes in this release
+- Focused on repository completeness and maintenance clarity

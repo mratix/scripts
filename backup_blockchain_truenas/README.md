@@ -1,4 +1,4 @@
-backup_blockchain_truenas.sh
+backup_blockchain_truenas.sh (v1.1.4)
 
 ZFS-first backup, restore and merge script for blockchain nodes running on TrueNAS.
 
@@ -148,8 +148,8 @@ DOCUMENTATION MAP
 README.short
   Quick orientation
 
-RELEASE_NOTES_v1.0.4.txt
-  Exact release state
+RELEASE_NOTES_v1.1.4.txt
+  Current release state
 
 default.conf, machine.conf, hpms1.conf
   Configuration examples
@@ -160,4 +160,3 @@ LICENSE
 Open source.
 No warranties.
 Use at your own risk.
-
