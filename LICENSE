@@ -11,7 +11,15 @@ erfolgt. Kommerzielle Nutzung erfordert eine ausdrückliche schriftliche
 Zustimmung des Rechteinhabers.
 
 Für eine kommerzielle Nutzung wende dich bitte an:
+<<<<<<< HEAD
 mratix (at) outlook (dot) com
+=======
+<<<<<<< ours
+mratix(at)outlook(dot)com
+=======
+mratix (at) outlook (dot) com
+>>>>>>> theirs
+>>>>>>> f631886 (	geändert:       LICENSE)
 
 ENGLISH
 =======
@@ -20,7 +28,15 @@ modified, and redistributed freely for non-commercial purposes only.
 Commercial use requires explicit written permission from the copyright holder.
 
 For commercial use, please contact:
+<<<<<<< HEAD
 mratix (at) outlook (dot) com
+=======
+<<<<<<< ours
+mratix(at)outlook(dot)com
+=======
+mratix (at) outlook (dot) com
+>>>>>>> theirs
+>>>>>>> f631886 (	geändert:       LICENSE)
 
 Disclaimer / Haftungsausschluss
 ------------------------------

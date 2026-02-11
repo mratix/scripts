@@ -27,8 +27,16 @@ Features:
 - hierarchical config system
 - safe restore (interactive)
 
+<<<<<<< HEAD
 Status: Gold Release v1.1.4
 -----------------------------------------------------------------------
+=======
+<<<<<<< ours
+=======
+Status: Gold Release v1.1.4
+-----------------------------------------------------------------------
+>>>>>>> theirs
+>>>>>>> f631886 (	geändert:       LICENSE)
 
 Supported Services:
 -------------------
@@ -101,6 +109,17 @@ Zielgruppe:
 - Admins, die Backups verstehen und anwenden möchten
 
 Nicht geeignet für Klickibunti-Setups.
+<<<<<<< HEAD
 
 Weitere Details, Design-Entscheidungen und Philosophie:
 siehe README.md
+=======
+<<<<<<< ours
+Weitere Details, Design-Entscheidungen und Philosophie: siehe README.md
+
+=======
+
+Weitere Details, Design-Entscheidungen und Philosophie:
+siehe README.md
+>>>>>>> theirs
+>>>>>>> f631886 (	geändert:       LICENSE)
