@@ -26,8 +26,9 @@ Features:
 - optional telemetry (Syslog / MySQL / Influx)
 - hierarchical config system
 - safe restore (interactive)
-Status: Gold Release v1.1.4
 
+Status: Gold Release v1.1.4
+-----------------------------------------------------------------------
 
 Supported Services:
 -------------------
@@ -100,5 +101,6 @@ Zielgruppe:
 - Admins, die Backups verstehen und anwenden möchten
 
 Nicht geeignet für Klickibunti-Setups.
-Weitere Details, Design-Entscheidungen und Philosophie: siehe README.md
 
+Weitere Details, Design-Entscheidungen und Philosophie:
+siehe README.md

@@ -1,4 +1,4 @@
-backup_blockchain_truenas.sh
+backup_blockchain_truenas.sh (v1.1.4)
 
 ZFS-first backup, restore and merge script for blockchain nodes running on TrueNAS.
 

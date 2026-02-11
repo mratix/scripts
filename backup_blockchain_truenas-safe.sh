@@ -34,7 +34,7 @@ is_mounted=false
 use_usb=false
 prune=false
 force=false
-verbose=false
+debug=false
 height=0
 is_zfs=false
 is_splitted=false
@@ -42,8 +42,6 @@ pool=""
 dataset=""
 srcdir=""
 destdir=""
-folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
-usbdev="/dev/sdf1"
 rsync_opts="-avz -P --update --stats --delete --info=progress2"
 
 # --- logger
