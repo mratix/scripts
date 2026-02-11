@@ -2,7 +2,7 @@
 # ============================================================
 # backup_blockchain_truenas.sh
 # Backup & restore script for blockchain nodes on TrueNAS Scale
-# Gold Release v1.1.6
+# Gold Release v1.1.7
 # Maintenance release: Logic errors elimination, stability, fine-tuning
 #
 # Supported services:
@@ -343,7 +343,7 @@ vlog "__prebackup__"
         ;;
         chia)
             $SERVICE_GETDATA && get_service_data
-            log "Fix SSL file permissions"
+            warn "Fix SSL file permissions"
             docker_exec "$SERVICE" chia init --fix-ssl-permissions
 
             local run_live_backup=true prompt_timeout="${CHIA_LIVE_BACKUP_PROMPT_TIMEOUT:-8}" keypress=""
@@ -373,6 +373,18 @@ vlog "__prebackup__"
                 fi
                 log "Moving backup away to archive $dbbakdir"
                 mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
+            warn "Fix SSL file permissions"
+            docker_exec "$SERVICE" chia init --fix-ssl-permissions
+            log "Starting live database backup... (takes long, 15mins+)"
+            docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
+            sync
+
+            local dbbakdir
+            # a set of archives
+            if [ -d "${DEST_MACHINE_BASE}/databases" ]; then dbbakdir=${DEST_MACHINE_BASE}/databases
+            elif [ -d "${DESTDIR}/../../databases/sqlite" ]; then dbbakdir=${DESTDIR}/../../databases/sqlite
+            elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
+            elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
             fi
         ;;
         *) return 1 ;;
