@@ -14,23 +14,19 @@ Neu / Aktualisiert
 
 Bekannte Einschränkungen
 
-Telemetrie nur vorbereitet (kein Export aktiv)
+- Die Blockhöhe wird aus dem Servicestatus nicht richtig geparst, übergibt der Logdatei-Rotation am Ende ein "unclean". Die vorherige Logdateil-Parsing Methode (Branch alpha) hat sich zuverlässiger gezeigt.
+- Telemetrie Export für Influx als http-Übergabe vorbereitet, nicht getestet.
+- Sonderfall ist weiter Monero LMDB mit rsync. Die Geschwindigkeitsoptimierung kann nicht weiter verbessert werden, nicht zufriedenstellend.
+- Import/Export für Nativen Dienst/ StartOS start9/ Umbrel usw. in Planung
 
-Service-spezifische Sonderfälle (z. B. monerod rsync-Optimierung) noch nicht re-integriert
-
-Replikation (z. B. trigger_replication) folgt in späteren Versionen
 
 Zielgruppe
 
 Diese Version richtet sich an:
-
-erfahrene Admins
-
-ZFS-basierte Setups
-
-Betreiber von Blockchain-Nodes
-
-Nicht geeignet für „Fire & Forget“.
+- Erfahrene Linux Admins
+- ZFS-basierte Systeme (hier TruNAS Scale)
+- Betreiber von Blockchain-Nodes
+- Nicht geeignet für "Fire & Forget" oder copy&paste-Benutzer.
 
 Upgrade-Hinweis
 

@@ -1,11 +1,9 @@
 #!/bin/bash
-#
 # ============================================================
 # backup_blockchain_truenas.sh
-# Gold Release v1.1.3
-# Maintenance release: config handling, init-config fixes, stability
-#
 # Backup & restore script for blockchain nodes on TrueNAS Scale
+# Gold Release v1.1.7
+# Maintenance release: Logic errors elimination, stability, fine-tuning
 #
 # Supported services:
 #   - bitcoind
@@ -13,27 +11,23 @@
 #   - chia
 #
 # Supported long flags:
-#   --mode:     backup|merge|verify|restore
-#   --service:  bitcoind|monerod|chia
-#   --getdata
-#   --verbose
-#   --debug
-#   --dry-run
-#   --force
-#   --init-config
-#   --help
+#   --mode      backup|merge|verify|restore
+#   --service   bitcoind|monerod|chia
+#   --init-config --getdata --verbose --debug --dry-run --force --help
 #
 # Design goals:
 #   - deterministic
-#   - headless-safe (except restore)
+#   - headless-safe
 #   - ZFS-first (snapshots, replication)
-#   - rsync as fallback (merge,verify tool)
+#   - rsync as fallback (merge, verify)
 #   - minimal persistent state
+#   - configuration is externalized and layered
+#   - CLI always takes precedence and wins
+#   - Minimal and safe version available (backup_blockchain_truenas-safe.sh)
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
 # Refactor & extensions: ChatGPT codex <- With best thanks for the support
 # ============================================================
-#
 
 set -Eeuo pipefail
 
@@ -52,7 +46,7 @@ RSYNC_EXCLUDES=(
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
-  [chia]="ix-chia-farmer-1"
+  [chia]="ix-chia-chia-1"
 )
 declare -A SERVICE_APP_MAP=(
   [bitcoind]="bitcoind"
@@ -62,7 +56,7 @@ declare -A SERVICE_APP_MAP=(
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
 SERVICE_STOP_BEFORE=true
-SERVICE_START_AFTER=false
+SERVICE_START_AFTER=""
 SERVICE_STOP_METHOD="graceful"  # midclt|graceful|docker
 
 ########################################
@@ -113,7 +107,7 @@ log() {
 }
 vlog() {
     $VERBOSE || return 0
-    log "$*"
+    log "\> $*"
 }
 warn() {
     log "Warning: $*"
@@ -127,7 +121,6 @@ error() {
 # Statefile helpers (minimal audit trail)
 #
 set_statefile() {
-vlog "__set_statefile__"
     touch "$STATEFILE" 2>/dev/null || warn "Statefile not writable"
 
   if [ -f "$STATEFILE" ]; then
@@ -140,6 +133,11 @@ vlog "__set_statefile__"
   fi
 }
 
+get_statefile_value() {
+    local key="$1"
+    [[ -n "${STATEFILE:-}" && -f "$STATEFILE" ]] || return 0
+    sed -nE "s/^${key}=(.*)$/\1/p" "$STATEFILE" | tail -n1
+}
 
 ########################################
 # Config handling
@@ -195,7 +193,6 @@ vlog "__load_config_chain__"
     done
 }
 
-
 ########################################
 # Preparation
 #
@@ -207,7 +204,6 @@ vlog "__prepare__"
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
     log "  DESTDIR=${DESTDIR}"
-sleep 4 # give some time to look at the output
     [ -n "$SERVICE" ] || error "SERVICE not set"
     [ -n "$POOL" ]    || error "POOL not set"
     [ -n "$DATASET" ] || error "DATASET not set"
@@ -215,6 +211,7 @@ sleep 4 # give some time to look at the output
     [ -n "$DESTDIR" ] || error "DESTDIR not set"
     [ -d "$SRCDIR" ]  || error "Source directory does not exist: $SRCDIR"
     mkdir -p "$DESTDIR" || error "Failed to create destination: $DESTDIR"
+sleep 4 # give some time to look at the output
 }
 
 ########################################
@@ -223,7 +220,7 @@ sleep 4 # give some time to look at the output
 take_snapshot() {
     local snapdataset snapname
     snapdataset="${POOL}/${DATASET}/${SERVICE}"
-    snapname="script-$(date +%Y-%m-%d_%H-%M-%S)"
+    snapname="script-$(date +%Y-%m-%d_%H-%M)"
 
     if [ "$DRY_RUN" = true ]; then
         log "DRY-RUN: zfs snapshot -r ${snapdataset}@${snapname}"
@@ -329,15 +326,67 @@ list_snapshots() {
 # Backup (rsync-based, snapshot protected)
 # Restore (interactive, never headless)
 #
+prebackup() {
+vlog "__prebackup__"
+    local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
+    [[ -n "$ct" ]] || return 0
+
+    log "Dive into the container: $ct"
+    case "$SERVICE" in
+        bitcoind)
+            $SERVICE_GETDATA && get_service_data
+        ;;
+        monerod)
+            $SERVICE_GETDATA && get_service_data
+        ;;
+        chia)
+            $SERVICE_GETDATA && get_service_data
+            warn "Fix SSL file permissions"
+            docker_exec "$SERVICE" chia init --fix-ssl-permissions
+
+            local run_live_backup=true prompt_timeout="${CHIA_LIVE_BACKUP_PROMPT_TIMEOUT:-8}" keypress=""
+            if [ -t 0 ]; then
+                show "Optional: press any key within ${prompt_timeout}s to skip Chia live DB backup (slow step)."
+                if read -r -t "$prompt_timeout" -n 1 keypress 2>/dev/null; then
+                    run_live_backup=false
+                    log "Skipping Chia live database backup (operator input detected)."
+                else
+                    log "No operator input within ${prompt_timeout}s - continue with Chia live database backup."
+                fi
+            else
+                vlog "Headless run detected - continue with Chia live database backup."
+            fi
+
+            if [[ "$run_live_backup" == true ]]; then
+                log "Starting live database backup... (takes long, 15mins+)"
+                docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
+                sync
+
+                local dbbakdir
+                # a set of archives
+                if [ -d "${DEST_MACHINE_BASE}/databases" ]; then dbbakdir=${DEST_MACHINE_BASE}/databases
+                elif [ -d "${DESTDIR}/../../databases/sqlite" ]; then dbbakdir=${DESTDIR}/../../databases/sqlite
+                elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
+                elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
+                fi
+                log "Moving backup away to archive $dbbakdir"
+                mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
+            fi
+        ;;
+        *) return 1 ;;
+    esac
+vlog "__prebackup__done"
+}
+
 backup_restore_blockchain() {
 vlog "__backup_restore_blockchain__ start"
 
     if [ "$DRY_RUN" = true ]; then
-        log "Starting rsync dry-run backup ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
+        show "Starting rsync dry-run ${MODE} ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
         return 0
     fi
 
-    show "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
+    log "Starting rsync ${MODE} from ${SRCDIR}/ to ${DESTDIR}/"
     if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
         rsync_exit=$?
     else
@@ -347,7 +396,7 @@ vlog "__backup_restore_blockchain__ start"
 case "$rsync_exit" in
       0)
         log "rsync ${MODE} completed successfully"
-        ;;
+      ;;
       23|24)
         warn "rsync ${MODE} completed with warnings code=$rsync_exit; retrying once"
         if ! rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" "$SRCDIR/" "$DESTDIR/"; then
@@ -359,10 +408,8 @@ case "$rsync_exit" in
             error "rsync ${MODE} failed after retry code=$rsync_exit"
         fi
         log "rsync ${MODE} completed successfully after retry"
-        ;;
-      *)
-        error "rsync failed code=$rsync_exit"
-        ;;
+      ;;
+      *) error "rsync failed code=$rsync_exit" ;;
     esac
 }
 
@@ -438,8 +485,8 @@ vlog "__verify_backup_restore__"
         error "Verify found differences"
     fi
 
-    set_statefile verify_status "success"
-vlog "__verify_backup_restore__ done"
+     log "Verify successfully - no differences"
+     set_statefile verify_status "success"
 }
 
 ########################################
@@ -453,7 +500,7 @@ service_stop() {
         *)
             warn "Unknown SERVICE_STOP_METHOD=${SERVICE_STOP_METHOD}, falling back to docker"
             service_stop_docker
-            ;;
+        ;;
     esac
 }
 
@@ -481,20 +528,18 @@ vlog "__service_stop_graceful__"
         return 0
     fi
 
-    log "Attempting graceful stop (inside container): $ct"
+    log "Attempting graceful stop. Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
-            docker exec "$ct" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
-            ;;
+            docker_exec "$SERVICE" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
+        ;;
         monerod)
-            docker exec "$ct" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
-            ;;
+            docker_exec "$SERVICE" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
+        ;;
         chia)
-            docker exec "$ct" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
-            ;;
-        *)
-            warn "Graceful stop not defined for service=${SERVICE}"
-            ;;
+            docker_exec "$SERVICE" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
+        ;;
+        *) warn "Graceful stop not defined for service=${SERVICE}" ;;
     esac
 
     service_stop_docker
@@ -534,27 +579,39 @@ service_start() {
 }
 
 ########################################
+# failed headless run can restore prior service state
+#
+restore_service() {
+    local exit_code=$?
+
+    if [[ "$exit_code" -ne 0 && "${SERVICE_START_AFTER:-false}" == true ]]; then
+        service_start
+    fi
+
+    trap - EXIT
+    exit "$exit_code"
+}
+
+########################################
 # Rotating log file
 #
 rotate_logfile() {
 vlog "__rotate_logfile__"
-    local service_logfile
-    local logfile_dir logfile_name logfile_base
-    local rotated_file
-    local suffix=""
-    local was_running
-    local height
-    local today=$(date +%y%m%d)
-
     if [[ "$MODE" != "backup" ]]; then
+        # not backup mode, skip
         return 0
     fi
+
+    local service_logfile logfile_dir logfile_name logfile_base rotated_file
+    local was_running
+    local height_stamp="" suffix=""
+    local today=$(date +%y%m%d)
 
     case "$SERVICE" in
         bitcoind) service_logfile="${SRCDIR}/debug.log" ;;
         monerod) service_logfile="${SRCDIR}/bitmonero.log" ;;
-        chia) return 0 ;;
-        *) return 0 ;;
+        chia) service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log" ;;
+        *) return 1 ;;
     esac
 
     if [[ ! -f "$service_logfile" ]]; then
@@ -572,19 +629,17 @@ vlog "__rotate_logfile__"
         suffix="-unclean"
     fi
 
-    local raw_height
-    raw_height="${BLOCK_HEIGHT:-$(get_block_height || true)}"
-    BLOCK_HEIGHT="$(normalize_block_height "$raw_height")"
-    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -ge 111111 ]]; then
-        height="_h${BLOCK_HEIGHT}"
+    BLOCK_HEIGHT="$(resolve_block_height "${BLOCK_HEIGHT:-}")"
+    if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 111111 ]]; then
+        height_stamp="_h${BLOCK_HEIGHT}"
     else
-        height=""
+        height_stamp=""
     fi
 
     logfile_dir="$(dirname "$service_logfile")"
     logfile_name="$(basename "$service_logfile")"
     logfile_base="${logfile_name%.*}"
-    rotated_file="${logfile_dir}/${logfile_base}_${today}${height}${suffix}.log"
+    rotated_file="${logfile_dir}/${logfile_base}_${today}${height_stamp}${suffix}.log"
 
     if [[ "${was_running}" == true ]]; then
         cp -u "$service_logfile" "$rotated_file" || warn "Failed to copy log to ${rotated_file}"
@@ -652,43 +707,103 @@ docker_exec() {
     local ct="${SERVICE_CT_MAP[$service]:-}"
     [[ -n "$ct" ]] || return 1
 
+    log "Dive into the container: $ct"
     docker exec "$ct" "$@" 2>/dev/null
 }
 
 get_block_height() {
 vlog "__get_block_height__"
-  if check_service_running; then
-    # get from running service
-    local ct
-    ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
-    [[ -n "$ct" ]] || return 1
-    command -v docker >/dev/null 2>&1 || return
+    check_service_running || true
 
-    case "$SERVICE" in
-        bitcoind)
-            docker exec "$ct" bitcoin-cli getblockcount 2>/dev/null
+    if [[ "$SERVICE_RUNNING" == true ]]; then
+        log "Get blockheight from running service"
+        case "$SERVICE" in
+            bitcoind)
+                docker_exec "$SERVICE" bitcoin-cli getblockcount | sed -nE 's/^([0-9]+)$/\1/p' | head -n1
+                return
             ;;
-        monerod)
-            #docker exec "$ct" monerod status 2>/dev/null | awk '/Height:/ {print $2}'
-            #3384305/3604686
-            #docker exec "$ct" monerod print_height 2>/dev/null | awk 'END {print $1}' # wert ans ende geh#ngt
-            docker exec "$ct" monerod print_height 2>/dev/null | tail -n1
-            #docker exec "$ct" monero-wallet-cli bc_height # unused
+            monerod)
+                docker_exec "$SERVICE" monerod print_height | sed -nE 's/.*([0-9]+).*/\1/p' | head -n1
+                return
             ;;
-        chia)
-            docker exec "$ct" chia blockchain height 2>/dev/null
+            chia)
+                docker_exec "$SERVICE" chia show --state | sed -nE 's/.*Height:[[:space:]]*([0-9]+).*/\1/p' | head -n1
+                return
             ;;
-        *)
-            return 1
+            *) return 1 ;;
+        esac
+    fi
+
+    if [[ "$SERVICE_RUNNING" == false ]]; then
+        log "Parse blockheight from logfile"
+        local service_logfile
+        case "$SERVICE" in
+            bitcoind)
+                service_logfile="${SRCDIR}/debug.log"
+                [ -f "${service_logfile}" ] && tail -n50 "$service_logfile" | sed -nE 's/.*height=([0-9]+).*/\1/p' | tail -n1
+                return
             ;;
-    esac
-  #elif    # parse from logfile
-  fi
+            monerod)
+                service_logfile="${SRCDIR}/bitmonero.log"
+                [ -f "${service_logfile}" ] && tail -n50 "$service_logfile" | sed -nE 's/.*Synced[[:space:]]+([0-9]+)\/.*/\1/p' | tail -n1
+                return
+            ;;
+            chia)
+                service_logfile="${SRCDIR}/.chia/mainnet/log/debug.log"
+                [ -f "${service_logfile}" ] && tail -n100 "$service_logfile" | sed -nE 's/.*(height|Height)[= :]+([0-9]+).*/\2/p' | tail -n1
+                return
+            ;;
+            *) return 0 ;;
+        esac
+    fi
 }
 
 normalize_block_height() {
-  local value="$1"
-  awk 'match($0, /[0-9]+/) {print substr($0, RSTART, RLENGTH); exit}' <<<"$value"
+    local value="$1"
+    sed -nE 's/^([0-9]+)$/\1/p' <<<"${value}" | head -n1
+}
+
+resolve_block_height() {
+    local override_height="$1"
+    local source=""
+    local raw_height=""
+    local normalized_height=""
+    local fallback_height=""
+
+    if [[ -n "${override_height:-}" ]]; then
+        normalized_height="$(normalize_block_height "$override_height")"
+        if [[ -n "$normalized_height" ]]; then
+            source="override"
+            raw_height="$override_height"
+        else
+            warn "BLOCK_HEIGHT override is not numeric: '${override_height}'"
+        fi
+    fi
+
+    if [[ -z "$source" ]]; then
+        raw_height="$(get_block_height || true)"
+        normalized_height="$(normalize_block_height "$raw_height")"
+        if [[ -n "$normalized_height" ]]; then
+            source="service_or_log"
+        fi
+    fi
+
+    if [[ -z "$source" ]]; then
+        fallback_height="$(normalize_block_height "$(get_statefile_value block_height || true)")"
+        if [[ -n "$fallback_height" ]]; then
+            normalized_height="$fallback_height"
+            source="statefile"
+            warn "Blockheight source invalid/unavailable, fallback to statefile: ${normalized_height}"
+        fi
+    fi
+
+    if [[ -z "$source" ]]; then
+        source="unavailable"
+        warn "No numeric blockheight could be resolved"
+    fi
+
+    log "Resolved blockheight source=${source} raw='${raw_height:-${override_height:-}}' normalized='${normalized_height:-}'"
+    printf '%s' "$normalized_height"
 }
 
 check_service_running() {
@@ -696,25 +811,27 @@ check_service_running() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     if [[ -z "$ct" ]]; then
         SERVICE_RUNNING=false
-        return 1
-    fi
-
-    if ! command -v docker >/dev/null 2>&1; then
+    elif ! command -v docker >/dev/null 2>&1; then
         warn "docker binary not available; assuming service is not running"
         SERVICE_RUNNING=false
-        return 1
+    elif docker ps -q -f "name=^${ct}$" | grep -q .; then
+        SERVICE_RUNNING=true
+    else
+        SERVICE_RUNNING=false
     fi
 
-    if docker ps -q -f "name=^${ct}$" | grep -q .; then
-        SERVICE_RUNNING=true
+    SERVICE_WAS_RUNNING="$SERVICE_RUNNING"
+    if [[ -z "${SERVICE_START_AFTER:-}" ]]; then
+        SERVICE_START_AFTER="$SERVICE_WAS_RUNNING"
+    fi
+
+    if [[ "$SERVICE_RUNNING" == true ]]; then
         return 0
     fi
-
-    SERVICE_RUNNING=false
     return 1
 }
 
-# grab data from service, little node-info
+# Retrieve data from service, service overview-info
 get_service_data() {
   check_service_running || return 0
   if [[ "$SERVICE_RUNNING" == true ]]; then
@@ -722,25 +839,25 @@ get_service_data() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
 
-    show "Short service summary:"
+    show "Getting short service summary..."
+    log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
-            docker exec "$ct" bitcoin-cli -getinfo -color=auto 2>/dev/null \
+            docker_exec "$SERVICE" bitcoin-cli -getinfo -color=auto \
                 | while IFS= read -r line; do show "$line"; done
-            ;;
+        ;;
         monerod)
-            docker exec "$ct" monerod status 2>/dev/null \
+            docker_exec "$SERVICE" monerod status \
                 | while IFS= read -r line; do show "$line"; done
-            ;;
+        ;;
         chia)
-            ;;
-        *)
-            return 1
-            ;;
+            docker_exec "$SERVICE" chia show --state \
+                | while IFS= read -r line; do show "$line"; done
+        ;;
+        *) return 1 ;;
     esac
   fi
 }
-
 
 ########################################
 # Metrics / audit
@@ -765,7 +882,7 @@ vlog "__collect_metrics__"
 
     METRIC_SERVICE="$SERVICE"
     METRIC_MODE="$MODE"
-    METRIC_BLOCK_HEIGHT="$(normalize_block_height "$(get_block_height || true)")"
+    METRIC_BLOCK_HEIGHT="$(resolve_block_height "")"
 
     set_statefile block_height "$METRIC_BLOCK_HEIGHT"
     set_statefile snapshot_count "$METRIC_SNAPSHOT_COUNT"
@@ -786,7 +903,6 @@ telemetry_run_end() {
     esac
 }
 
-
 telemetry_http() {
     curl -fsS -XPOST "$INFLUX_URL" \
         --data-binary \
@@ -794,13 +910,11 @@ telemetry_http() {
 runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_HEIGHT}"
 }
 
-
 telemetry_syslog() {
     /usr/bin/logger -t backup_restore_blockchain \
       "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
 snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
 }
-
 
 telemetry_none() {
   return 0
@@ -815,19 +929,16 @@ vlog "__telemetry_event__"
   case "$TELEMETRY_BACKEND" in
     none|"")
       return 0
-      ;;
+    ;;
     syslog)
       telemetry_syslog "$level" "$msg" "$source"
-      ;;
+    ;;
     http)
       telemetry_http "$level" "$msg" "$source"
-      ;;
-    *)
-      warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
-      ;;
+    ;;
+    *) warn "Unknown telemetry backend: $TELEMETRY_BACKEND" ;;
   esac
 }
-
 
 send_telemetry() {
 vlog "__send_telemetry__"
@@ -841,14 +952,11 @@ vlog "__send_telemetry__"
 #  --data-binary \
 #  "backup,host=$THIS_HOST,service=$SERVICE mode=\"$MODE\",runtime=$RUNTIME,exit=$EXIT_CODE"
             send_telemetry_influx "$runtime" "$exit" "$src" "$dst"
-            ;;
-        *)
-            warn "Unknown telemetry backend: $TELEMETRY_BACKEND"
-            ;;
+        ;;
+        *) warn "Unknown telemetry backend: $TELEMETRY_BACKEND" ;;
     esac
   fi
 }
-
 
 send_telemetry_syslog() {
 logger -t backup_restore_blockchain \
@@ -870,7 +978,7 @@ send_telemetry_http() {
 }
 
 ########################################
-# Create example config files
+# Create example configuration files
 #
 init_config() {
 vlog "__init_config__"
@@ -911,7 +1019,7 @@ ENABLED=true
 MODE=backup
 DRY_RUN=true
 EOF
-      ;;
+    ;;
     machine)
       cat >"$file" <<'EOF'
 # --- machine.conf ---
@@ -937,7 +1045,7 @@ VERBOSE=true                    # enable verbose outputs
 TELEMETRY_ENABLED=true
 TELEMETRY_BACKEND="syslog"      # none|syslog|http|influx
 EOF
-      ;;
+    ;;
     host)
       cat >"$file" <<'EOF'
 # --- ${host}.conf ---
@@ -948,10 +1056,8 @@ EOF
 SERVICE="bitcoind"
 LOGFILE="/var/log/backup_restore_blockchain_truenas.log"
 EOF
-      ;;
-    *)
-      error "Unknown config type: $type"
-      ;;
+    ;;
+    *) error "Unknown config type: $type" ;;
   esac
 vlog "__create_config__ done"
 }
@@ -975,51 +1081,51 @@ vlog "__parse_cli_args__"
   # Iterate over the options
   while true; do
     case "$1" in
-      -m|--mode)
-        MODE="$2"
-        CLI_MODE="$2"
-        shift 2
+        -m|--mode)
+            MODE="$2"
+            CLI_MODE="$2"
+            shift 2
         ;;
-      -s|--service)
-        SERVICE="$2"
-        CLI_SERVICE="$2"
-        shift 2
+        -s|--service)
+            SERVICE="$2"
+            CLI_SERVICE="$2"
+            shift 2
         ;;
-      -g|--getdata)
-        SERVICE_GETDATA=true
-        shift
+        -g|--getdata)
+            SERVICE_GETDATA=true
+            shift
         ;;
-      --verbose)
-        VERBOSE=true
-        SERVICE_GETDATA=true
-        shift
+        --verbose)
+            VERBOSE=true
+            SERVICE_GETDATA=true
+            shift
         ;;
-      --debug)
-        DEBUG=true
-        shift
+        --debug)
+            DEBUG=true
+            shift
         ;;
-      -t|--dry-run)
-        DRY_RUN=true
-        shift
+        -t|--dry-run)
+            DRY_RUN=true
+            shift
         ;;
-      -f|--force)
-        FORCE=true
-        shift
+        -f|--force)
+            FORCE=true
+            shift
         ;;
-      --init-config)
-        INIT_CONFIG=true
-        shift
+        --init-config)
+            INIT_CONFIG=true
+            shift
         ;;
-      --help)
-        usage
-        exit 0
+        --help)
+            usage
+            exit 0
         ;;
-      --)
-        shift
-        break
+        --)
+            shift
+            break
         ;;
-      *)
-        error "Unknown option: $1"
+        *)
+            error "Unknown option: $1"
         ;;
     esac
   done
@@ -1039,7 +1145,7 @@ vlog "__parse_cli_args_non__"
   fi
 }
 
-# CLI overrides (for testing, without changing config)
+# CLI overrides (for testing, without changing the configuration)
 apply_cli_overrides() {
 vlog "__apply_cli_overrides__"
   local override key value
@@ -1069,11 +1175,12 @@ vlog "__apply_cli_overrides__"
     key="${override%%=*}"
     value="${override#*=}"
     case " ${allowed_vars[*]} " in
-      *" ${key} "*)
-        declare -g "${key}=${value}"
+        *" ${key} "*)
+            declare -g "${key}=${value}"
+            log "Overrided settings: ${key}=${value}"
         ;;
-      *)
-        error "Unknown override variable: ${key}"
+        *)
+            error "Unknown override variable: ${key}"
         ;;
     esac
   done
@@ -1112,7 +1219,7 @@ $DEBUG && set -x # enable debug
 
 START_TS=$(date +%s)
 THIS_HOST=$(hostname -s)
-show "Script started on node $THIS_HOST"
+show "Script started on Node $THIS_HOST"
 
 vlog "Start settings: $@" # all given args
 parse_cli_args "$@"
@@ -1128,7 +1235,7 @@ if $INIT_CONFIG; then
 fi
 
 load_config_chain
-vlog "Using settings: mode=${MODE}, service=${SERVICE}" # todo: after read config, show all feeded variables
+vlog "Use settings: " # todo: after read configs, show feeded variables $@ $* ?
 
 if [[ -n "${CLI_MODE:-}" ]]; then
   MODE="$CLI_MODE"
@@ -1137,28 +1244,23 @@ if [[ -n "${CLI_SERVICE:-}" ]]; then
   SERVICE="$CLI_SERVICE"
 fi
 apply_cli_overrides
-
 resolve_home_paths
 
-# ab hier: normaler Betrieb, SERVICE zwingend
+# from here: normal operation, SERVICE mandatory
 vlog "__main_normal__"
 if [[ -z "${SERVICE:-}" ]]; then
   error "SERVICE not set"
 fi
 
-resolve_paths
+STATEFILE="${SRCDIR}/$SERVICE.state" # temporary relocated, adapt to your own
+resolve_paths   # from here: SERVICE-folder to path attached
 prepare
-
-if [[ -n "${SERVICE_GETDATA:-}" ]]; then
-  get_service_data
-fi
 
 if $USE_USB; then
   [[ -b "$USB_ID" ]] && DESTDIR="$USB_MOUNT/$DATASET/$SERVICE" || error "USB device not found"
-  # Automount minimal
+  # mount minimal
   # mount | grep "$USB_MOUNT" || mount "$USB_ID" "$USB_MOUNT"
 fi
-
 
 ########################################
 # Execute part
@@ -1167,27 +1269,28 @@ vlog "__main_execute__"
 EXIT_CODE=0
 case "$MODE" in
     backup)
+        trap 'restore_service' EXIT
         check_service_running || true
-        SERVICE_WAS_RUNNING="${SERVICE_RUNNING}"
         take_snapshot
+        $SERVICE_RUNNING && prebackup
         $SERVICE_STOP_BEFORE && service_stop
         rotate_logfile
         backup_restore_blockchain
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
         $SERVICE_START_AFTER && service_start
         $VERBOSE && list_snapshots
-        ;;
+    ;;
     merge)
         service_stop
         merge_dirs
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
         #$SERVICE_START_AFTER && service_start
         $VERBOSE && list_snapshots
-        ;;
+    ;;
     verify)
         verify_backup_restore || EXIT_CODE=$?
         $VERBOSE && list_snapshots
-        ;;
+    ;;
     restore)
         $FORCE || error "Restore requires --force"
         warn "RESTORE MODE – this will overwrite local data"
@@ -1202,7 +1305,7 @@ case "$MODE" in
         backup_restore_blockchain
         restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
         $VERIFY && verify_backup_restore || EXIT_CODE=$?
-        ;;
+    ;;
 esac
 
 ########################################
@@ -1220,3 +1323,5 @@ exit "$EXIT_CODE"
 #
 # End
 ########################################
+
+# ============================================================
