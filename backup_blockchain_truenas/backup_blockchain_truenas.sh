@@ -75,7 +75,7 @@ DEST_MACHINE_BASE=""
 CLI_MODE=""
 CLI_SERVICE=""
 CLI_OVERRIDES=()
-BLOCK_HEIGHT=""                 # Blockheight
+BLOCK_HEIGHT=${BLOCK_HEIGHT:-0} # Blockheight
 
 ########################################
 # Helper variables and state holder
@@ -109,7 +109,7 @@ log() {
 }
 vlog() {
     $VERBOSE || return 0
-    log "$*"
+    log "\> $*"
 }
 warn() {
     log "Warning: $*"
@@ -200,7 +200,6 @@ vlog "__prepare__"
     log "Resolved paths:"
     log "  SRCDIR=${SRCDIR}"
     log "  DESTDIR=${DESTDIR}"
-sleep 4 # give some time to look at the output
     [ -n "$SERVICE" ] || error "SERVICE not set"
     [ -n "$POOL" ]    || error "POOL not set"
     [ -n "$DATASET" ] || error "DATASET not set"
@@ -208,6 +207,7 @@ sleep 4 # give some time to look at the output
     [ -n "$DESTDIR" ] || error "DESTDIR not set"
     [ -d "$SRCDIR" ]  || error "Source directory does not exist: $SRCDIR"
     mkdir -p "$DESTDIR" || error "Failed to create destination: $DESTDIR"
+sleep 4 # give some time to look at the output
 }
 
 ########################################
@@ -339,7 +339,7 @@ vlog "__prebackup__"
             $SERVICE_GETDATA && get_service_data
             log "Fix SSL file permissions"
             docker exec "$ct" chia init --fix-ssl-permissions
-            log "Starting live database backup"
+            log "Starting live database backup... (takes long, 15mins+)"
             docker exec "$ct" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
             sync
 
@@ -350,7 +350,7 @@ vlog "__prebackup__"
             elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
             elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
             fi
-            log "Rotate/archive database backup"
+            log "Moving backup away to archive $dbbakdir"
             mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
         ;;
         *) return 1 ;;
@@ -1122,7 +1122,7 @@ vlog "__apply_cli_overrides__"
     case " ${allowed_vars[*]} " in
         *" ${key} "*)
             declare -g "${key}=${value}"
-            log "Overrided setting: ${key}=${value}"
+            log "Overrided settings: ${key}=${value}"
         ;;
         *)
             error "Unknown override variable: ${key}"
@@ -1180,7 +1180,7 @@ if $INIT_CONFIG; then
 fi
 
 load_config_chain
-vlog "Using settings: " # todo: after read configs, show feeded variables $@ $* ?
+vlog "Use settings: " # todo: after read configs, show feeded variables $@ $* ?
 
 if [[ -n "${CLI_MODE:-}" ]]; then
   MODE="$CLI_MODE"
