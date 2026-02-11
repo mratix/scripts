@@ -35,16 +35,7 @@ set -Eeuo pipefail
 # Config defaults
 #
 LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
-<<<<<<< HEAD
 STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
-=======
-<<<<<<< ours
-#STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
-STATEFILE=""
-=======
-STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
->>>>>>> theirs
->>>>>>> f631886 (	geändert:       LICENSE)
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude='/.zfs'
@@ -77,27 +68,13 @@ POOL=""
 DATASET=""
 SRC_BASE=""
 DEST_BASE=""
+DEST_MACHINE_BASE=""
 SRCDIR=""
 DESTDIR=""
-<<<<<<< HEAD
-CLI_MODE=""
-CLI_SERVICE=""
-CLI_OVERRIDES=()
-BLOCK_HEIGHT=""                 # Blockheight
-=======
-<<<<<<< ours
-DEST_MACHINE_BASE=""
 CLI_MODE=""
 CLI_SERVICE=""
 CLI_OVERRIDES=()
 BLOCK_HEIGHT=${BLOCK_HEIGHT:-0} # Blockheight
-=======
-CLI_MODE=""
-CLI_SERVICE=""
-CLI_OVERRIDES=()
-BLOCK_HEIGHT=""                 # Blockheight
->>>>>>> theirs
->>>>>>> f631886 (	geändert:       LICENSE)
 
 ########################################
 # Helper variables and state holder
@@ -165,8 +142,6 @@ get_statefile_value() {
 
 ########################################
 # Config handling
-# Rules:
-# - Missing files are ignored with warning
 # - Later files override earlier ones
 # - CLI / environment variables override config
 load_config() {
