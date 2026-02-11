@@ -345,6 +345,36 @@ vlog "__prebackup__"
             $SERVICE_GETDATA && get_service_data
             warn "Fix SSL file permissions"
             docker_exec "$SERVICE" chia init --fix-ssl-permissions
+
+            local run_live_backup=true prompt_timeout="${CHIA_LIVE_BACKUP_PROMPT_TIMEOUT:-8}" keypress=""
+            if [ -t 0 ]; then
+                show "Optional: press any key within ${prompt_timeout}s to skip Chia live DB backup (slow step)."
+                if read -r -t "$prompt_timeout" -n 1 keypress 2>/dev/null; then
+                    run_live_backup=false
+                    log "Skipping Chia live database backup (operator input detected)."
+                else
+                    log "No operator input within ${prompt_timeout}s - continue with Chia live database backup."
+                fi
+            else
+                vlog "Headless run detected - continue with Chia live database backup."
+            fi
+
+            if [[ "$run_live_backup" == true ]]; then
+                log "Starting live database backup... (takes long, 15mins+)"
+                docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
+                sync
+
+                local dbbakdir
+                # a set of archives
+                if [ -d "${DEST_MACHINE_BASE}/databases" ]; then dbbakdir=${DEST_MACHINE_BASE}/databases
+                elif [ -d "${DESTDIR}/../../databases/sqlite" ]; then dbbakdir=${DESTDIR}/../../databases/sqlite
+                elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
+                elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
+                fi
+                log "Moving backup away to archive $dbbakdir"
+                mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
+            warn "Fix SSL file permissions"
+            docker_exec "$SERVICE" chia init --fix-ssl-permissions
             log "Starting live database backup... (takes long, 15mins+)"
             docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
             sync
@@ -356,8 +386,6 @@ vlog "__prebackup__"
             elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
             elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
             fi
-            log "Moving backup away to archive $dbbakdir"
-            mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
         ;;
         *) return 1 ;;
     esac
