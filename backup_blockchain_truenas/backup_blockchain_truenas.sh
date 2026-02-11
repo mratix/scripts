@@ -2,7 +2,7 @@
 # ============================================================
 # backup_blockchain_truenas.sh
 # Backup & restore script for blockchain nodes on TrueNAS Scale
-# Gold Release v1.1.6
+# Gold Release v1.1.7
 # Maintenance release: Logic errors elimination, stability, fine-tuning
 #
 # Supported services:
@@ -343,7 +343,7 @@ vlog "__prebackup__"
         ;;
         chia)
             $SERVICE_GETDATA && get_service_data
-            log "Fix SSL file permissions"
+            warn "Fix SSL file permissions"
             docker_exec "$SERVICE" chia init --fix-ssl-permissions
             log "Starting live database backup... (takes long, 15mins+)"
             docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
