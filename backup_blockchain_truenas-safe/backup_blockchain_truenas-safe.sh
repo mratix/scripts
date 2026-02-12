@@ -738,7 +738,7 @@ usage() {
     echo "  full|--full              Backup all configured services"
     echo ""
     echo "OPTIONS:"
-    echo "  -h, --height N           Set blockchain height (numeric)"
+    echo "  -bh, --height N         Set blockchain height (numeric)"
     echo "  -f, --force              Force operation (bypass safety checks)"
     echo "  -v, --verbose            Enable verbose output"
     echo "  -x, --debug              Enable shell debugging"
@@ -748,7 +748,7 @@ usage() {
     echo "  -h, --help               Show this help message"
     echo ""
     echo "EXAMPLES:"
-    echo "  $0 btc -h 936125           # Backup Bitcoin at height 936125"
+    echo "  $0 btc -bh 936125         # Backup Bitcoin at height 936125"
     echo "  $0 --service monerod -v     # Backup Monero with verbose output"
     echo "  $0 restore --force         # Force restore operation"
     echo "  $0 --full --host hpms1    # Backup all services on hpms1"
@@ -788,7 +788,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         # Options (require arguments)
-        -h|--height)
+        -bh|--height)
             [[ -z "${2:-}" ]] && { echo "Error: --height requires a value"; usage; exit 1; }
             height="$2"
             shift 2
