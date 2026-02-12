@@ -12,7 +12,7 @@ set -euo pipefail
 #   - mempool
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
-version="260212-safe"
+version="260213-safe"
 # ============================================================
 
 echo "-------------------------------------------------------------------------------"
@@ -21,13 +21,13 @@ echo "Backup blockchain and or services to NAS/USB (safe version)"
 # --- config
 LOGGER=/usr/bin/logger
 nasuser=your_username
-nashost=192.168.1.100
+nashost=192.168.178.20
 nashostname=cronas
 nasshare=blockchain
 
 # Load external configuration if available
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-CONFIG_FILE="${SCRIPT_DIR}/backup_blockchain_truenas-safe.conf"
+CONFIG_FILE="${SCRIPT_DIR}/safe.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
 fi
@@ -56,7 +56,15 @@ full_mode=false
 target_service=""
 target_host=""
 
-# Validate height input
+# --- logger
+show() { echo "$*"; }
+log() { echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
+vlog() { [[ "${verbose:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
+warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: $*"; }
+error() { echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $*" >&2; exit 1; }
+
+
+# --- Validate height input
 validate_height() {
     local input_height="$1"
     local service_name="$2"
@@ -65,42 +73,35 @@ validate_height() {
         bitcoind)
             # Bitcoin height should be 6-8 digits (current ~800k)
             if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
-                log_error "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
+                warn "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
                 return 1
             fi
             ;;
         monerod)
             # Monero height should be 6-7 digits (current ~3M)
             if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
-                log_error "Invalid Monero height: $input_height (should be 6-7 digits)"
+                warn "Invalid Monero height: $input_height (should be 6-7 digits)"
                 return 1
             fi
             ;;
         chia)
             # Chia height can vary, use reasonable range
             if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
-                log_error "Invalid Chia height: $input_height (should be 1-8 digits)"
+                warn "Invalid Chia height: $input_height (should be 1-8 digits)"
                 return 1
             fi
             ;;
         *)
-            # undefined case, exit with error
-            echo "Error: Invalid argument '$1'"
-            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
+            # undefined case, exit
+            warn "Error: Invalid argument '$1'"
+            show "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
             exit 1
         ;;
     esac
 
-    log_debug "Validated height: $input_height for service: $service_name"
+    vlog "Validated height: $input_height for service: $service_name"
     return 0
 }
-
-# --- logger
-log_info() { echo "$(date +'%Y-%m-%d %H:%M:%S') [INFO] $*"; }
-log_warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') [WARN] $*"; }
-log_error() { echo "$(date +'%Y-%m-%d %H:%M:%S') [ERROR] $*" >&2; }
-log_debug() { [[ "${verbose:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') [DEBUG] $*"; }
-log() { log_info "$1"; }
 
 
 # --- mount destination
@@ -113,15 +114,13 @@ else
     mount | grep $nasmount >/dev/null
     [ $? -eq 0 ] || mount -t cifs -o user=$nasuser //$nashost/$nasshare $nasmount
     sleep 2
-    [ -f "$nasmount/$nashostname.dummy" ] && [ -f "$nasmount/dir.dummy" ] && echo "Network share $nasmount is mounted and valid backup storage."
+    [ -f "$nasmount/$nashostname.dummy" ] && [ -f "$nasmount/dir.dummy" ] && show "Network share $nasmount is mounted and valid backup storage."
         if [ ! -w "$nasmount/" ]; then
-            echo "[ ! ] Error: Destination $nasmount on //$nashost/$nasshare is NOT writable! Exit."
-            log "$(date +%y%m%d%H%M%S) ! share $nasmount write permissions deny"
-            destdir=/dev/null
-            exit 127
+            warn "Error: Destination $nasmount on //$nashost/$nasshare is NOT writable."
+            error "$nasmount write permissions deny"
         else
             is_mounted=true
-            log "$(date +%y%m%d%H%M%S) share $nasmount mounted, validated"
+            log "share $nasmount mounted, validated"
         fi
 fi
 }
@@ -134,16 +133,14 @@ mount_usb(){
     mount | grep /mnt/usb >/dev/null
     [ $? -eq 0 ] || mount $usbdev /mnt/usb
     sleep 2
-    [ ! -f "$nasmount/usb.dummy" ] && { echo "[ ! ] Error: Mounted disk is not valid and or not prepared as backup storage! Exit."; exit 127; }
+    [ ! -f "$nasmount/usb.dummy" ] && { show "Mounted disk is not valid and or not prepared as backup storage! Exit."; exit 1; }
         if [ ! -w "$nasmount/" ]; then
-            echo "[ ! ] Error: Disk $nasmount is NOT writable! Exit."
-            log "$(date +%y%m%d%H%M%S) ! usb $nasmount write permissions deny"
-            destdir=/dev/null
-            exit 127
+            warn "Error: Disk $nasmount is NOT writable! Exit."
+            error "usb $nasmount write permissions deny"
         fi
     is_mounted=true
-    echo "USB disk is (now) mounted and valid backup storage."
-    log "$(date +%y%m%d%H%M%S) usb $nasmount mounted, valid"
+    show "USB disk is (now) mounted and valid backup storage."
+    log "usb $nasmount mounted, valid"
 }
 
 
@@ -158,8 +155,8 @@ unmount_dest(){
 
 # --- evaluate environment
 prepare(){
-echo "Script started at $(date +%H:%M:%S)"
-log "$(date +%y%m%d%H%M%S) script started"
+show "Script started at $(date +%H:%M:%S)"
+log "script started"
 
 # host|arg|service|pool|splitted
 #MAP="
@@ -168,12 +165,13 @@ log "$(date +%y%m%d%H%M%S) script started"
 #hpms1|xmr|monerod|ssd|true
 #hpms1|xch|chia|ssd|true
 #"
+}
 
 # Enhanced prepare function for single service or full mode
 prepare_single_service() {
     local blockchain_type="${1:-$target_service}"
     local hostname_override="${target_host:-$(hostname -s)}"
-    
+
     # Map blockchain type to service if needed
     case "$blockchain_type" in
         btc) service="bitcoind" ;;
@@ -181,28 +179,27 @@ prepare_single_service() {
         xch) service="chia" ;;
         *) service="$blockchain_type" ;;
     esac
-    
+
     local host_service_key="${hostname_override}_${blockchain_type}"
     if [[ -n "${SERVICE_CONFIGS[$host_service_key]:-}" ]]; then
         IFS=':' read -r svc_name pool_name <<< "${SERVICE_CONFIGS[$host_service_key]}"
         is_zfs=true
         service="$svc_name"
         pool="$pool_name"
-        log "$(date +%y%m%d%H%M%S) host:${hostname_override} service:$service"
+        log "host:${hostname_override} service:$service"
     else
-        echo "[ ! ] Error: Service $blockchain_type not configured for host $hostname_override. Exit."
-        log "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
-        exit 1
+        warn "Error: Service $blockchain_type is not configured for host $hostname_override"
+        error "Exit"
     fi
     dataset=$pool/blockchain
 }
 
 prepare() {
-echo "Script started at $(date +%H:%M:%S)"
-log "$(date +%y%m%d%H%M%S) script started"
+show "Script started at $(date +%H:%M:%S)"
+log "script started"
 
 if [[ "$full_mode" == true ]]; then
-    echo "=== FULL MODE: Backup all configured services ==="
+    show "=== FULL MODE: Backup all configured services ==="
     return
 fi
 
@@ -226,46 +223,14 @@ prepare_single_service
     fi
 
 # output results
-    echo "------------------------------------------------------------"
-    echo "Identified blockchain is $service"
-    log "$(date +%y%m%d%H%M%S) blockchain/service=$service"
+    show "------------------------------------------------------------"
+    show "Identified blockchain is $service"
+    log "blockchain/service=$service"
 
-    echo "Source path     : ${srcdir}"
-    echo "Destination path: ${destdir}"
-    echo "------------------------------------------------------------"
-    log "$(date +%y%m%d%H%M%S) direction $srcdir > $destdir"
-
-    read -r -p "Please check paths. (Autostart in 5 seconds will go to mount destination)" -t 5 -n 1 -s
-mount_dest
-}
-    dataset=$pool/blockchain
-
-# construct paths
-    nasmount=/mnt/$nashostname/$nasshare # redefine share, recheck is the new $nasshare mounted
-    srcdir=/mnt/$dataset/$service
-    destdir=$nasmount/$service
-    [[ "$restore" == true ]] && srcdir=/mnt/$dataset/$service
-# case to usb disk (case restore from network to usb not needed)
-    [[ "$use_usb" == true ]] && destdir=/mnt/usb/$nasshare/$service
-
-    # Use rsync options from config
-    if [[ "$restore" == true ]]; then
-        rsync_opts="${RSYNC_CONFIGS[restore]}"
-    elif [[ -n "${RSYNC_CONFIGS[$service]:-}" ]]; then
-        rsync_opts="${RSYNC_CONFIGS[$service]}"
-    else
-        rsync_opts="-avz -P --update --stats --delete --info=progress2"  # fallback
-    fi
-
-# output results
-    echo "------------------------------------------------------------"
-    echo "Identified blockchain is $service"
-    log "$(date +%y%m%d%H%M%S) blockchain/service=$service"
-
-    echo "Source path     : ${srcdir}"
-    echo "Destination path: ${destdir}"
-    echo "------------------------------------------------------------"
-    log "$(date +%y%m%d%H%M%S) direction $srcdir > $destdir"
+    show "Source path     : ${srcdir}"
+    show "Destination path: ${destdir}"
+    show "------------------------------------------------------------"
+    log "direction $srcdir > $destdir"
 
     read -r -p "Please check paths. (Autostart in 5 seconds will go to mount destination)" -t 5 -n 1 -s
 mount_dest
@@ -274,9 +239,9 @@ mount_dest
 
 # --- pre-tasks, stop service
 prestop(){
-log "$(date +%y%m%d%H%M%S) try stop $service"
+log "try stop $service"
 
-echo "Attempting to stop $service via TrueNAS API..."
+show "Attempting to stop $service via TrueNAS API..."
 
 # Try to stop service using TrueNAS API
 if command -v midclt >/dev/null 2>&1; then
@@ -286,10 +251,10 @@ if command -v midclt >/dev/null 2>&1; then
             release_names=("${service}-knots" "bitcoin-knots" "bitcoind" "bitcoin")
             for release_name in "${release_names[@]}"; do
                 if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                    echo "Found release: $release_name, stopping..."
+                    show "Found release: $release_name, stopping..."
                     if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
-                        echo "[ OK] Service $release_name scaling down via API."
-                        log "$(date +%y%m%d%H%M%S) $release_name stopped via API"
+                        show "Service $release_name scaling down via API."
+                        log "$release_name stopped via API"
                         break
                     fi
                 fi
@@ -299,10 +264,10 @@ if command -v midclt >/dev/null 2>&1; then
             release_names=("${service}" "monero" "monerod-knots")
             for release_name in "${release_names[@]}"; do
                 if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                    echo "Found release: $release_name, stopping..."
+                    show "Found release: $release_name, stopping..."
                     if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
-                        echo "[ OK] Service $release_name scaling down via API."
-                        log "$(date +%y%m%d%H%M%S) $release_name stopped via API"
+                        show "Service $release_name scaling down via API."
+                        log "$release_name stopped via API"
                         break
                     fi
                 fi
@@ -312,10 +277,10 @@ if command -v midclt >/dev/null 2>&1; then
             release_names=("${service}" "chia-blockchain" "chia-mainnet")
             for release_name in "${release_names[@]}"; do
                 if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                    echo "Found release: $release_name, stopping..."
+                    show "Found release: $release_name, stopping..."
                     if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
-                        echo "[ OK] Service $release_name scaling down via API."
-                        log "$(date +%y%m%d%H%M%S) $release_name stopped via API"
+                        show "Service $release_name scaling down via API."
+                        log "$release_name stopped via API"
                         break
                     fi
                 fi
@@ -323,13 +288,13 @@ if command -v midclt >/dev/null 2>&1; then
             ;;
     esac
 else
-    echo "[ ! ] midclt command not found, falling back to manual intervention"
+    show "midclt command not found, falling back to manual intervention"
 fi
 
-echo "Checking active service..."
+show "Checking active service..."
 
-    echo "The $service service shutdown and flushing cache takes long time."
-    echo "Waiting for graceful shutdown..."
+    show "The $service service shutdown and flushing cache takes long time."
+    show "Waiting for graceful shutdown..."
 
     # Wait for service to stop with timeout
     local timeout=300  # 5 minutes max wait
@@ -338,30 +303,30 @@ echo "Checking active service..."
 
     while [ $elapsed -lt $timeout ]; do
         if [ -f "${srcdir}/$service.pid" ]; then
-            echo "Wait for process $service to stop... (${elapsed}s elapsed)"
+            show "Wait for process $service to stop... (${elapsed}s elapsed)"
             sleep $check_interval
             ((elapsed += check_interval))
         else
-            echo "Great, service is now down."
+            show "Great, service is now down."
             break
         fi
     done
 
 # --- service check, final verification
 if [ -f "${srcdir}/$service.pid" ]; then
-    echo "[ ! ] Warning: Service may still be running after $timeout seconds."
-    echo "[ ! ] Please verify manually that ${service} is stopped before proceeding."
+    show "Warning: Service may still be running after $timeout seconds."
+    show "Please verify manually that ${service} is stopped before proceeding."
     read -r -p "Continue anyway? (y/N): " -t 30 confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        echo "[ ! ] Aborting due to potentially running service."
-        log "$(date +%y%m%d%H%M%S) ! abort: service still running"
+        show "Aborting due to potentially running service."
+        log "! abort: service still running"
         exit 1
     fi
 else
-    echo "[ OK ] Service $service is down."
+    show "Service $service is down."
 fi
 
-echo "------------------------------------------------------------"
+show "------------------------------------------------------------"
 }
 
 
@@ -386,11 +351,11 @@ compare() {
     srcsynctime=$(stat -c %Y "$srcfile")
     destsynctime=$(stat -c %Y "$destfile")
 
-    echo "------------------------------------------------------------"
-    echo "Remote backup : $(date -d "@$destsynctime")"
-    echo "Local data    : $(date -d "@$srcsynctime")"
+    show "------------------------------------------------------------"
+    show "Remote backup : $(date -d "@$destsynctime")"
+    show "Local data    : $(date -d "@$srcsynctime")"
     if (( destsynctime > srcsynctime )); then
-        echo "Attention: Remote backup is newer than local data."
+        show "Attention: Remote backup is newer than local data."
     fi
     if [ "$destfile" -nt "$srcfile" ]; then
         return 1    # backup newer
@@ -476,7 +441,7 @@ cd $srcdir
 compare
 rc=$?
 if [ "$rc" -ne 0 ]; then
-    echo "Remote holds newer data. Prevent overwrite, stopping."
+    show "Remote holds newer data. Prevent overwrite, stopping."
     exit 1
 fi
 
@@ -495,16 +460,16 @@ fi
         # Try to auto-detect height from logs
         local detected_height=$(get_block_height)
         if [[ "$detected_height" -gt 0 ]]; then
-            echo "Detected blockchain height: $detected_height"
-            echo "Minimum reasonable height for $service: $min_height"
-            read -p "[ ? ] Use detected height? (Y/n): " confirm
+            show "Detected blockchain height: $detected_height"
+            show "Minimum reasonable height for $service: $min_height"
+            read -p "Use detected height? (Y/n): " confirm
             if [[ "$confirm" != "n" && "$confirm" != "N" ]]; then
                 height="$detected_height"
             fi
         else
             # Show log snippets for manual reference
-            echo "Height too low for $service (minimum: $min_height)"
-            echo "Showing recent log entries for manual height setting:"
+            show "Height too low for $service (minimum: $min_height)"
+            show "Showing recent log entries for manual height setting:"
             # bitcoind
             [ -f ${srcdir}/debug.log ] && tail -n20 debug.log | grep UpdateTip
             # example line: 2026-02-11T23:43:57Z UpdateTip: new best=000000000000000000015ca4e4a3fa112840d412315e42c4e89ec22dfdcf158f height=936124 version=0x2478c000 log2_work=96.079058 tx=1308589657 date='2026-02-11T23:43:48Z' progress=1.000000 cache=5.1MiB(37068txo)
@@ -522,32 +487,30 @@ fi
         fi
 
         # Enhanced height file listing with better pattern matching
-        echo "Remote backuped heights found     : $(find ${destdir} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || echo "None")"
-        echo "Local working height is           : $(find ${srcdir} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || echo "None")"
-        echo "Current configured height          : $height"
-        echo "Minimum reasonable height for $service: $min_height"
-        echo "------------------------------------------------------------"
-        read -p "[ ? ] Set new Blockchain height   : h" height
+        show "Remote backuped heights found     : $(find ${destdir} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || show "None")"
+        show "Local working height is           : $(find ${srcdir} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || show "None")"
+        show "Current configured height          : $height"
+        show "Minimum reasonable height for $service: $min_height"
+        show "------------------------------------------------------------"
+        read -p "Set new Blockchain height   : h" height
     fi
 
     # Validate height before proceeding
     if [[ ! "$height" =~ ^[0-9]+$ ]] || [ "$height" -le 0 ]; then
-        echo "[ ! ] Error: Invalid height value '$height'. Must be a positive number."
-        log "$(date +%y%m%d%H%M%S) ! invalid height $height"
-        exit 1
+        warn "Error: Invalid height value '$height'. Must be a positive number."
+        error "invalid height $height"
     fi
 
-    echo "Blockchain height is now          : $height"
+    show "Blockchain height is now          : $height"
 
-echo ""
-echo "Rotate log file started at $(date +%H:%M:%S)"
+show ""
+show "Rotate log file started at $(date +%H:%M:%S)"
     cd ${srcdir}
 
     # Validate source directory exists and is writable
     if [[ ! -w "$srcdir" ]]; then
-        echo "[ ! ] Error: Source directory $srcdir is not writable."
-        log "$(date +%y%m%d%H%M%S) ! srcdir not writable $srcdir"
-        exit 1
+        warn "Error: Source directory $srcdir is not writable."
+        error "srcdir not writable $srcdir"
     fi
 
     # Move existing height stamp files more safely
@@ -582,16 +545,16 @@ echo "Rotate log file started at $(date +%H:%M:%S)"
 
 # --- snapshot
 snapshot(){
-echo "Hint: Best time to take a snapshot is now."
+show "Hint: Best time to take a snapshot is now."
 # snapshot zfs dataset
 if [ "$is_zfs" ]; then
-    echo "Prepare dataset $dataset for a snapshot..."
+    show "Prepare dataset $dataset for a snapshot..."
     sync
     sleep 1
     snapname="script-$(date +%Y-%m-%d_%H-%M)"
     zfs snapshot -r ${dataset}@${snapname}
-    echo "[ OK] Snapshot '$snapname' was taken."
-    log "$(date +%y%m%d%H%M%S) snapshot $snapname taken"
+    show "Snapshot '$snapname' was taken."
+    log "snapshot $snapname taken"
 fi
 }
 
@@ -600,26 +563,26 @@ fi
 backup_blockchain(){
 cd $srcdir
 
-echo ""
-echo "Main task started at $(date +%H:%M:%S)"
-log "$(date +%y%m%d%H%M%S) start task backup pre"
+show ""
+show "Main task started at $(date +%H:%M:%S)"
+log "start task backup pre"
 
 # Ensure both timestamps are valid numbers
 if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
-    echo "[ ! ] Error: One of the timestamps is missing or invalid."
-    exit 1
+    warn "Error: One of the timestamps is missing or invalid."
+    error "Exit"
 fi
 
 # Prevent overwrite if destination is newer (and no force flag set)
 if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$force" ]; then
-    echo "[ ! ] Destination is newer (and maybe higher) than the source."
-    echo "      Better use restore. A force will ignore this situation. End."
-    log "$(date +%y%m%d%H%M%S) ! src-dest comparing triggers abort"
+    show "Destination is newer (and maybe higher) than the source."
+    show "      Better use restore. A force will ignore this situation. End."
+    log "! src-dest comparing triggers abort"
     exit 1
 elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$force" ]; then
-    echo "[ ! ] Destination is newer than the source."
-    echo "      Force will now overwrite it. This will downgrade the destination."
-    log "$(date +%y%m%d%H%M%S) src-dest downgrade forced"
+    show "Destination is newer than the source."
+    show "      Force will now overwrite it. This will downgrade the destination."
+    log "src-dest downgrade forced"
 fi
 
     # machine deop9020m/hpms1
@@ -636,20 +599,20 @@ fi
 
 i=1
 while [ "${folder[i]}" != "" ]; do
-    echo "------------------------------------------------------------"
-    echo "Start backup job: $service/${folder[i]}"
-    log "$(date +%y%m%d%H%M%S) start task backup main"
+    show "------------------------------------------------------------"
+    show "Start backup job: $service/${folder[i]}"
+    log "start task backup main"
     ionice -c 2 \
     rsync \
         ${rsync_opts} \
         --exclude '.nobakup' \
         ${srcdir}/${folder[i]}/ ${destdir}/${folder[i]}/
-    [ $? -ne 0 ] && echo "[ ! ] Errors during backup ${destdir}/${folder[i]}." && log "$(date +%y%m%d%H%M%S) ! task backup ${folder[i]} fail"
+    [ $? -ne 0 ] && warn "Errors during backup ${destdir}/${folder[i]}." && vlog "task backup ${folder[i]} fail"
     sync
     ((i++))
 done
-echo "------------------------------------------------------------"
-log "$(date +%y%m%d%H%M%S) end task backup main"
+show "------------------------------------------------------------"
+log "end task backup main"
 }
 
 
@@ -657,20 +620,20 @@ log "$(date +%y%m%d%H%M%S) end task backup main"
 postbackup(){
 if [[ "$restore" == false ]]; then
     chown -R apps:apps ${srcdir}
-    echo ""
+    show ""
 
     # Try to restart service using TrueNAS API
     if command -v midclt >/dev/null 2>&1; then
-        echo "Attempting to restart $service via TrueNAS API..."
+        show "Attempting to restart $service via TrueNAS API..."
         case "$service" in
             bitcoind)
                 release_names=("${service}-knots" "bitcoin-knots" "bitcoind" "bitcoin")
                 for release_name in "${release_names[@]}"; do
                     if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                        echo "Found release: $release_name, restarting..."
+                        show "Found release: $release_name, restarting..."
                         if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
-                            echo "[ OK] Service $release_name scaling up via API."
-                            log "$(date +%y%m%d%H%M%S) $release_name restarted via API"
+                            show "Service $release_name scaling up via API."
+                            log "$release_name restarted via API"
                             break
                         fi
                     fi
@@ -680,10 +643,10 @@ if [[ "$restore" == false ]]; then
                 release_names=("${service}" "monero" "monerod-knots")
                 for release_name in "${release_names[@]}"; do
                     if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                        echo "Found release: $release_name, restarting..."
+                        show "Found release: $release_name, restarting..."
                         if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
-                            echo "[ OK] Service $release_name scaling up via API."
-                            log "$(date +%y%m%d%H%M%S) $release_name restarted via API"
+                            show "Service $release_name scaling up via API."
+                            log "$release_name restarted via API"
                             break
                         fi
                     fi
@@ -693,10 +656,10 @@ if [[ "$restore" == false ]]; then
                 release_names=("${service}" "chia-blockchain" "chia-mainnet")
                 for release_name in "${release_names[@]}"; do
                     if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                        echo "Found release: $release_name, restarting..."
+                        show "Found release: $release_name, restarting..."
                         if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
-                            echo "[ OK] Service $release_name scaling up via API."
-                            log "$(date +%y%m%d%H%M%S) $release_name restarted via API"
+                            show "Service $release_name scaling up via API."
+                            log "$release_name restarted via API"
                             break
                         fi
                     fi
@@ -704,55 +667,55 @@ if [[ "$restore" == false ]]; then
                 ;;
         esac
     else
-        echo "[ ! ] midclt command not found, please restart $service manually"
+        show "midclt command not found, please restart $service manually"
     fi
 else
     chown -R apps ${destdir}
         # no service start after restore
-    echo "Restore task finished. Check the result in ${destdir}."
-    echo "Service $service will not automatically restarted."
+    show "Restore task finished. Check the result in ${destdir}."
+    show "Service $service will not automatically restarted."
 fi
 
-echo "Script ended at $(date +%H:%M:%S)"
-echo "End."
-echo "------------------------------------------------------------"
-log "$(date +%y%m%d%H%M%S) script end"
+show "Script ended at $(date +%H:%M:%S)"
+show "End."
+show "------------------------------------------------------------"
+log "script end"
 }
 
 
 # --- main logic
 
 # not args given
-[ $# -eq 0 ] && { echo "Arguments needed: btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|debug|force|mount|umount"; exit 1; }
+[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|debug|force|mount|umount"; exit 1; }
 
 # Enhanced argument parsing with getopts
 usage() {
-    echo "Usage: $0 [OPTIONS] [COMMAND] [ARGS]"
-    echo ""
-    echo "COMMANDS:"
-    echo "  btc|xmr|xch              Backup specific blockchain"
-    echo "  bitcoind|monerod|chia  Backup specific service"
-    echo "  restore                   Restore blockchain data"
-    echo "  mount                     Mount backup destination"
-    echo "  umount                    Unmount backup destination"
-    echo "  full|--full              Backup all configured services"
-    echo ""
-    echo "OPTIONS:"
-    echo "  -bh, --height N         Set blockchain height (numeric)"
-    echo "  -f, --force              Force operation (bypass safety checks)"
-    echo "  -v, --verbose            Enable verbose output"
-    echo "  -x, --debug              Enable shell debugging"
-    echo "      --usb                 Use USB device instead of network"
-    echo "      --service SERVICE     Target specific service"
-    echo "      --host HOSTNAME      Target specific host (for --full)"
-    echo "  -h, --help               Show this help message"
-    echo ""
-    echo "EXAMPLES:"
-    echo "  $0 btc -bh 936125         # Backup Bitcoin at height 936125"
-    echo "  $0 --service monerod -v     # Backup Monero with verbose output"
-    echo "  $0 restore --force         # Force restore operation"
-    echo "  $0 --full --host hpms1    # Backup all services on hpms1"
-    echo ""
+    show "Usage: $0 [OPTIONS] [COMMAND] [ARGS]"
+    show ""
+    show "COMMANDS:"
+    show "  btc|xmr|xch              Backup specific blockchain"
+    show "  bitcoind|monerod|chia  Backup specific service"
+    show "  restore                   Restore blockchain data"
+    show "  mount                     Mount backup destination"
+    show "  umount                    Unmount backup destination"
+    show "  full|--full              Backup all configured services"
+    show ""
+    show "OPTIONS:"
+    show "  -bh, --height N         Set blockchain height (numeric)"
+    show "  -f, --force              Force operation (bypass safety checks)"
+    show "  -v, --verbose            Enable verbose output"
+    show "  -x, --debug              Enable shell debugging"
+    show "      --usb                 Use USB device instead of network"
+    show "      --service SERVICE     Target specific service"
+    show "      --host HOSTNAME      Target specific host (for --full)"
+    show "  -h, --help               Show this help message"
+    show ""
+    show "EXAMPLES:"
+    show "  $0 btc -bh 936125         # Backup Bitcoin at height 936125"
+    show "  $0 --service monerod -v     # Backup Monero with verbose output"
+    show "  $0 restore --force         # Force restore operation"
+    show "  $0 --full --host hpms1    # Backup all services on hpms1"
+    show ""
 }
 
 # Parse arguments with proper getopts-style parsing
@@ -760,7 +723,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         # Commands (no arguments)
         btc|xmr|xch)
-            [[ -n "$target_service" ]] && { echo "Error: Multiple blockchain types specified"; usage; exit 1; }
+            [[ -n "$target_service" ]] && { error "Multiple blockchain types specified"; }
             target_service="$1"
             case "$1" in
                 btc) service="bitcoind" ;;
@@ -770,7 +733,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         bitcoind|monerod|chia|electrs|mempool)
-            [[ -n "$target_service" ]] && { echo "Error: Multiple services specified"; usage; exit 1; }
+            [[ -n "$target_service" ]] && { error "Multiple services specified"; }
             target_service="$1"
             service="$1"
             shift
@@ -787,26 +750,26 @@ while [[ $# -gt 0 ]]; do
             unmount_dest
             exit 0
             ;;
+        --usb)
+            use_usb=true
+            shift
+            ;;
         # Options (require arguments)
         -bh|--height)
-            [[ -z "${2:-}" ]] && { echo "Error: --height requires a value"; usage; exit 1; }
+            [[ -z "${2:-}" ]] && { error "--height requires a value"; }
             height="$2"
             shift 2
             ;;
         --service)
-            [[ -z "${2:-}" ]] && { echo "Error: --service requires a value"; usage; exit 1; }
+            [[ -z "${2:-}" ]] && { error "--service requires a value"; }
             service="$2"
             target_service="$2"
             shift 2
             ;;
         --host)
-            [[ -z "${2:-}" ]] && { echo "Error: --host requires a value"; usage; exit 1; }
+            [[ -z "${2:-}" ]] && { error "--host requires a value"; }
             target_host="$2"
             shift 2
-            ;;
-        --usb)
-            use_usb=true
-            shift
             ;;
         # Boolean flags
         -f|--force)
@@ -816,7 +779,7 @@ while [[ $# -gt 0 ]]; do
         -v|--verbose)
             verbose=true
             LOGGER=/usr/bin/logger
-            log "$(date +%y%m%d%H%M%S) verbose now enabled"
+            log "verbose now enabled"
             shift
             ;;
         -x|--debug)
@@ -833,7 +796,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         ver|version|--version)
-            echo "$version"
+            show "$version"
             exit 0
             ;;
         # Legacy/positional argument support
@@ -857,13 +820,13 @@ while [[ $# -gt 0 ]]; do
             elif [[ "$1" == "verbose" ]]; then
                 verbose=true
                 LOGGER=/usr/bin/logger
-                log "$(date +%y%m%d%H%M%S) verbose now enabled"
+                show "verbose now enabled"
                 shift
             elif [[ "$1" == "usb" ]]; then
                 use_usb=true
                 shift
             else
-                echo "Error: Unknown option '$1'"
+                warn "Error: Unknown option '$1'"
                 usage
                 exit 1
             fi
@@ -884,7 +847,7 @@ case "$1" in
             [ -z "$height" ] && height=0 # preset
             [ -n "$arg2" ] && height=$2 # todo check for numeric format
             [[ "$use_usb" == true ]] && nasmount=/mnt/usb/$nasshare
-            [ "$verbose" ] && echo "verbose 1:$arg1 2:$arg2 3:$arg3 4:$arg4 s:$service h:$height"
+            [ "$verbose" ] && show "verbose 1:$arg1 2:$arg2 3:$arg3 4:$arg4 s:$service h:$height"
             prepare
             prestop	# service stop
             prebackup
@@ -894,11 +857,11 @@ case "$1" in
             #unmount_dest
         ;;
         restore|--restore)
-            [ ! "$force" ] && echo "[ ! ] Task ignored. Force not given. Exit." && exit 1
-            echo "------------------------------------------------------------"
-            echo "RESTORE: Attention, the direction Source <-> Destination is now changed."
+            [ ! "$force" ] && show "Task ignored. Force not given. Exit." && exit 1
+            show "------------------------------------------------------------"
+            show "RESTORE: Attention, the direction Source <-> Destination is now changed."
             restore=true
-            log "$(date +%y%m%d%H%M%S) direction is restore"
+            log "direction is restore"
             prepare
             prestop
             backup_blockchain
@@ -907,14 +870,14 @@ case "$1" in
         ;;
         force|--force)
             force=true
-            echo "[ i ] Force is set."
-            log "$(date +%y%m%d%H%M%S) force is set"
+            show "Force is set."
+            log "force is set"
         ;;
         verbose|--verbose)
             verbose=true
             LOGGER=/usr/bin/logger
-            echo "[ i ] Debug is enabled."
-            log "$(date +%y%m%d%H%M%S) verbose now enabled"
+            show "Debug is enabled."
+            log "verbose now enabled"
         ;;
             --debug|-x)
             set -x
@@ -930,12 +893,12 @@ case "$1" in
             exit 0
             ;;
         ver|version|--version)
-            echo "$version"
+            show "$version"
             exit 0
             ;;
         *)
-            # undefined case, exit with error
-            echo "Error: Invalid argument '$1'"
+            # undefined case
+            warn "Error: Invalid argument '$1'"
             usage
             exit 1
             ;;
@@ -943,12 +906,12 @@ case "$1" in
 
 # --- full mode implementation
 backup_all_services() {
-    echo "=== BACKUP ALL CONFIGURED SERVICES ==="
-    
+    show "=== BACKUP ALL CONFIGURED SERVICES ==="
+
     # Get all available service configurations
     local all_services=()
     local hostname_target="${target_host:-$(hostname -s)}"
-    
+
     for config_key in "${!SERVICE_CONFIGS[@]}"; do
         # Extract hostname from config key (hostname_service)
         local config_host="${config_key%_*}"
@@ -958,44 +921,44 @@ backup_all_services() {
             all_services+=("$svc_name:$pool_name")
         fi
     done
-    
+
     if [[ ${#all_services[@]} -eq 0 ]]; then
-        echo "[ ! ] No services configured for host: $hostname_target"
+        show "No services configured for host: $hostname_target"
         exit 1
     fi
-    
-    echo "Found services to backup:"
+
+    show "Found services to backup:"
     for service_entry in "${all_services[@]}"; do
         IFS=':' read -r svc_name pool_name <<< "$service_entry"
-        echo "  - $svc_name (pool: $pool_name)"
+        show "  - $svc_name (pool: $pool_name)"
     done
-    
-    echo "------------------------------------------------------------"
-    echo "Starting full backup of all services..."
-    
+
+    show "------------------------------------------------------------"
+    show "Starting full backup of all services..."
+
     # Backup each service
     for service_entry in "${all_services[@]}"; do
         IFS=':' read -r svc_name pool_name <<< "$service_entry"
-        
-        echo ""
-        echo "=== Backing up service: $svc_name ==="
-        
+
+        show ""
+        show "=== Backing up service: $svc_name ==="
+
         # Set global variables for this service
         service="$svc_name"
         pool="$pool_name"
         dataset="$pool/blockchain"
         is_zfs=true
-        
+
         # Reset height for each service
         height=0
-        
+
         # Set paths for this service
         nasmount=/mnt/$nashostname/$nasshare
         srcdir=/mnt/$dataset/$service
         destdir=$nasmount/$service
         [[ "$restore" == true ]] && srcdir=/mnt/$dataset/$service
         [[ "$use_usb" == true ]] && destdir=/mnt/usb/$nasshare/$service
-        
+
         # Set rsync options
         if [[ "$restore" == true ]]; then
             rsync_opts="${RSYNC_CONFIGS[restore]}"
@@ -1004,19 +967,19 @@ backup_all_services() {
         else
             rsync_opts="-avz -P --update --stats --delete --info=progress2"
         fi
-        
+
         # Run backup workflow for this service
         prestop
         prebackup
         snapshot
         backup_blockchain_single
         postbackup
-        
-        echo "[ OK] Service $svc_name backup completed."
-        echo "------------------------------------------------------------"
+
+        show "Service $svc_name backup completed."
+        show "------------------------------------------------------------"
     done
-    
-    echo "=== ALL SERVICES BACKUP COMPLETED ==="
+
+    show "=== ALL SERVICES BACKUP COMPLETED ==="
 }
 
 # Single service backup function (extracted from backup_blockchain)
@@ -1024,26 +987,26 @@ backup_blockchain_single() {
     # This is the original backup_blockchain logic for single service
     cd $srcdir
 
-echo ""
-echo "Main task started at $(date +%H:%M:%S)"
-log "$(date +%y%m%d%H%M%S) start task backup pre"
+show ""
+show "Main task started at $(date +%H:%M:%S)"
+log "start task backup pre"
 
 # Ensure both timestamps are valid numbers
 if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
-    echo "[ ! ] Error: One of the timestamps is missing or invalid."
-    exit 1
+    warn "Error: One of the timestamps is missing or invalid."
+    error "Exit"
 fi
 
 # Prevent overwrite if destination is newer (and no force flag set)
 if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$force" ]; then
-    echo "[ ! ] Destination is newer (and maybe higher) than the source."
-    echo "      Better use restore. A force will ignore this situation. End."
-    log "$(date +%y%m%d%H%M%S) ! src-dest comparing triggers abort"
+    show "Destination is newer (and maybe higher) than the source."
+    show "      Better use restore. A force will ignore this situation. End."
+    log "! src-dest comparing triggers abort"
     exit 1
 elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$force" ]; then
-    echo "[ ! ] Destination is newer than the source."
-    echo "      Force will now overwrite it. This will downgrade the destination."
-    log "$(date +%y%m%d%H%M%S) src-dest downgrade forced"
+    show "Destination is newer than the source."
+    show "      Force will now overwrite it. This will downgrade the destination."
+    log "src-dest downgrade forced"
 fi
 
     # Service-specific file copying and folder setup
@@ -1062,20 +1025,20 @@ fi
 
 i=1
 while [ "${folder[i]}" != "" ]; do
-    echo "------------------------------------------------------------"
-    echo "Start backup job: $service/${folder[i]}"
-    log "$(date +%y%m%d%H%M%S) start task backup main"
+    show "------------------------------------------------------------"
+    show "Start backup job: $service/${folder[i]}"
+    log "start task backup main"
     ionice -c 2 \
     rsync \
         ${rsync_opts} \
         --exclude '.nobakup' \
         ${srcdir}/${folder[i]}/ ${destdir}/${folder[i]}/
-    [ $? -ne 0 ] && echo "[ ! ] Errors during backup ${destdir}/${folder[i]}." && log "$(date +%y%m%d%H%M%S) ! task backup ${folder[i]} fail"
+    [ $? -ne 0 ] && warn "Error: During backup ${destdir}/${folder[i]}." && vlog "task backup ${folder[i]} fail"
     sync
     ((i++))
 done
-echo "------------------------------------------------------------"
-log "$(date +%y%m%d%H%M%S) end task backup main"
+show "------------------------------------------------------------"
+log "end task backup main"
 }
 
 # --- main execution logic
@@ -1100,3 +1063,4 @@ exit
 
 # ------------------------------------------------------------------------
 # errors
+

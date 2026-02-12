@@ -1,10 +1,11 @@
 #!/bin/bash
+set -Eeuo pipefail
 # ============================================================
 # Backup & restore script for blockchain nodes on TrueNAS Scale
-# Gold Release v1.1.7
+# Gold Release v1.1.8
 # Maintenance release: Logic errors elimination, stability, fine-tuning
 #
-# Supported services:
+# Supported blockchains and services:
 #   - bitcoind
 #   - monerod
 #   - chia
@@ -25,10 +26,8 @@
 #   - Minimal and safe version available (backup_blockchain_truenas-safe.sh)
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
-# Refactor & extensions: ChatGPT codex <- With best thanks for the support
+# Refactor & extensions: ChatGPT codex, OpenCode <- With best thanks for the support
 # ============================================================
-
-set -Eeuo pipefail
 
 ########################################
 # Config defaults
@@ -99,23 +98,11 @@ VERBOSE="${VERBOSE:-false}"
 ########################################
 # Logging helpers
 #
-show() {
-    echo "$*"
-}
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"
-}
-vlog() {
-    $VERBOSE || return 0
-    log "> $*"
-}
-warn() {
-    log "Warning: $*"
-}
-error() {
-    log "ERROR: $*"
-    exit 1
-}
+show() { echo "$*"; }
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"; }
+vlog() { $VERBOSE || return 0; log "> $*"; }
+warn() { log "Warning: $*"; }
+error() { log "ERROR: $*"; exit 1; }
 
 ########################################
 # Statefile helpers (minimal audit trail)
@@ -310,7 +297,7 @@ list_snapshots_table() {
 
 list_snapshots() {
     log "List of blockchain-relevant snapshots for $SERVICE"
-    echo ""
+    show ""
 
     if [ "$VERBOSE" = true ]; then
         list_snapshots_simple
@@ -1318,33 +1305,33 @@ RUNTIME=$((END_TS - START_TS))
 get_block_height() {
     local parsed_height=0
     local service_logfile=""
-    
+
     # Method 1: Try Docker API (most reliable if running)
     if command -v docker >/dev/null 2>&1; then
         case "$service" in
             bitcoind)
                 parsed_height=$(docker exec "$service" bitcoin-cli getblockcount 2>/dev/null | grep -o '[0-9]\+' | head -n1)
-                log_debug "Got Bitcoin height from Docker API: $parsed_height"
+                vlog "Got Bitcoin height from Docker API: $parsed_height"
                 ;;
             monerod)
                 parsed_height=$(docker exec "$service" monerod print_height 2>/dev/null | grep -o '[0-9]\+' | head -n1)
-                log_debug "Got Monero height from Docker API: $parsed_height"
+                vlog "Got Monero height from Docker API: $parsed_height"
                 ;;
             chia)
                 parsed_height=$(docker exec "$service" chia show --state 2>/dev/null | sed -nE 's/.*Height:[[:space:]]*([0-9]+).*/\1/p')
-                log_debug "Got Chia height from Docker API: $parsed_height"
+                vlog "Got Chia height from Docker API: $parsed_height"
                 ;;
         esac
-        
+
         if [[ "$parsed_height" -gt 0 ]]; then
             echo "$parsed_height"
             return 0
         fi
     fi
-    
+
     # Method 2: Fallback to improved log parsing
-    log_debug "Falling back to log parsing for $service"
-    
+    vlog "Falling back to log parsing for $service"
+
     case "$service" in
         bitcoind)
             service_logfile="${srcdir}/debug.log"
@@ -1353,7 +1340,7 @@ get_block_height() {
                 local height_line=$(tail -n100 "$service_logfile" | grep -E "UpdateTip.*height=[0-9]+" | tail -1)
                 if [[ "$height_line" =~ height=([0-9]+) ]]; then
                     parsed_height="${BASH_REMATCH[1]}"
-                    log_debug "Parsed Bitcoin height: $parsed_height from UpdateTip line"
+                    vlog "Parsed Bitcoin height: $parsed_height from UpdateTip line"
                 fi
             fi
             ;;
@@ -1364,7 +1351,7 @@ get_block_height() {
                 local height_line=$(tail -n100 "$service_logfile" | grep -E "Synced[[:space:]]+[0-9]+/[0-9]+" | tail -1)
                 if [[ "$height_line" =~ Synced[[:space:]]+([0-9]+)/[0-9]+ ]]; then
                     parsed_height="${BASH_REMATCH[1]}"
-                    log_debug "Parsed Monero height: $parsed_height from Synced line"
+                    vlog "Parsed Monero height: $parsed_height from Synced line"
                 fi
             fi
             ;;
@@ -1375,14 +1362,14 @@ get_block_height() {
                 "${srcdir}/.chia/mainnet/log/wallet.log"
                 "${srcdir}/log/debug.log"
             )
-            
+
             for log_file in "${chia_logs[@]}"; do
                 if [[ -f "$log_file" ]]; then
                     # Try multiple patterns for Chia
                     local height_line=$(tail -n200 "$log_file" | grep -Ei "(height|block)[[:space:]]*[=:]?[[:space:]]*[0-9]+" | tail -1)
                     if [[ "$height_line" =~ (height|block)[[:space:]]*[=:]?[[:space:]]*([0-9]+) ]]; then
                         parsed_height="${BASH_REMATCH[2]}"
-                        log_debug "Parsed Chia height: $parsed_height from $log_file"
+                        vlog "Parsed Chia height: $parsed_height from $log_file"
                         break
                     fi
                 fi
@@ -1395,19 +1382,19 @@ get_block_height() {
                 local height_line=$(tail -n100 "$bitcoind_log" | grep -E "UpdateTip.*height=[0-9]+" | tail -1)
                 if [[ "$height_line" =~ height=([0-9]+) ]]; then
                     parsed_height="${BASH_REMATCH[1]}"
-                    log_debug "Parsed electrs height: $parsed_height from bitcoind log"
+                    vlog "Parsed electrs height: $parsed_height from bitcoind log"
                 fi
             fi
             ;;
     esac
-    
+
     # Validate and return
     if [[ "$parsed_height" =~ ^[0-9]+$ ]] && [ "$parsed_height" -gt 0 ]; then
         echo "$parsed_height"
-        log_debug "Final height result: $parsed_height"
+        vlog "Final height result: $parsed_height"
     else
         echo "0"
-        log_debug "Failed to parse height, returning 0"
+        vlog "Failed to parse height, returning 0"
     fi
 }
 
@@ -1415,44 +1402,51 @@ get_block_height() {
 validate_height() {
     local input_height="$1"
     local service_name="$2"
-    
+
     case "$service_name" in
         bitcoind)
             # Bitcoin height should be 6-8 digits (current ~800k)
             if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
-                log_error "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
+                error "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
                 return 1
             fi
             ;;
         monerod)
             # Monero height should be 6-7 digits (current ~3M)
             if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
-                log_error "Invalid Monero height: $input_height (should be 6-7 digits)"
+                error "Invalid Monero height: $input_height (should be 6-7 digits)"
                 return 1
             fi
             ;;
         chia)
             # Chia height can vary, use reasonable range
             if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
-                log_error "Invalid Chia height: $input_height (should be 1-8 digits)"
+                error "Invalid Chia height: $input_height (should be 1-8 digits)"
                 return 1
             fi
             ;;
         *)
-            log_error "Unknown service for height validation: $service_name"
+            error "Unknown service for height validation: $service_name"
             return 1
             ;;
     esac
-    
-    log_debug "Validated height: $input_height for service: $service_name"
+
+    vlog "Validated height: $input_height for service: $service_name"
     return 0
 }
 collect_metrics "$RUNTIME" "$EXIT_CODE"
 telemetry_run_end "$RUNTIME" "$EXIT_CODE"
+
 log "Script finished successfully"
 exit "$EXIT_CODE"
 #
 # End
 ########################################
 
-# ============================================================
+# ------------------------------------------------------------------------
+# todos
+
+
+# ------------------------------------------------------------------------
+# errors
+
