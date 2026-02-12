@@ -1,6 +1,5 @@
 #!/bin/bash
 # ============================================================
-# backup_blockchain_truenas.sh
 # Backup & restore script for blockchain nodes on TrueNAS Scale
 # Gold Release v1.1.7
 # Maintenance release: Logic errors elimination, stability, fine-tuning
@@ -108,7 +107,7 @@ log() {
 }
 vlog() {
     $VERBOSE || return 0
-    log "\> $*"
+    log "> $*"
 }
 warn() {
     log "Warning: $*"
@@ -310,7 +309,8 @@ list_snapshots_table() {
 }
 
 list_snapshots() {
-    log "List of blockchain-relevant snapshots: $SERVICE"
+    log "List of blockchain-relevant snapshots for $SERVICE"
+    echo ""
 
     if [ "$VERBOSE" = true ]; then
         list_snapshots_simple
@@ -330,7 +330,6 @@ vlog "__prebackup__"
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
             $SERVICE_GETDATA && get_service_data
@@ -527,18 +526,18 @@ vlog "__service_stop_graceful__"
         return 0
     fi
 
-    log "Attempting graceful stop. Dive into the container: $ct"
+    log "Attempting graceful stop of container: $ct"
     case "$SERVICE" in
         bitcoind)
-            docker_exec "$SERVICE" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for bitcoind"
+            docker_exec "$SERVICE" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for $SERVICE"
         ;;
         monerod)
-            docker_exec "$SERVICE" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for monerod"
+            docker_exec "$SERVICE" monerod exit >/dev/null 2>&1 || warn "Graceful stop failed for $SERVICE"
         ;;
         chia)
-            docker_exec "$SERVICE" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for chia"
+            docker_exec "$SERVICE" chia stop -d all >/dev/null 2>&1 || warn "Graceful stop failed for $SERVICE"
         ;;
-        *) warn "Graceful stop not defined for service=${SERVICE}" ;;
+        *) warn "Graceful stop not defined for service ${SERVICE}" ;;
     esac
 
     service_stop_docker
@@ -569,7 +568,7 @@ service_start() {
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    log "Starting service container: $ct"
+    log "Starting container: $ct"
     if docker start "$ct" >/dev/null 2>&1; then
         SERVICE_RUNNING=true
     else
@@ -722,7 +721,7 @@ vlog "__get_block_height__"
                 return
             ;;
             monerod)
-                docker_exec "$SERVICE" monerod print_height | sed -nE 's/.*([0-9]+).*/\1/p' | head -n1
+                docker_exec "$SERVICE" monerod print_height | tail -n1 | sed -nE 's/.*([0-9]+).*/\1/p'
                 return
             ;;
             chia)
@@ -839,7 +838,6 @@ get_service_data() {
     [[ -n "$ct" ]] || return 1
 
     show "Getting short service summary..."
-    log "Dive into the container: $ct"
     case "$SERVICE" in
         bitcoind)
             docker_exec "$SERVICE" bitcoin-cli -getinfo -color=auto \
@@ -876,7 +874,7 @@ vlog "__collect_metrics__"
             | grep "^${POOL}/${DATASET}/${SERVICE}@" \
             | wc -l || echo 0)"
     else
-        warn "zfs binary not available; snapshot metrics defaulting to 0"
+        warn "zfs binary not available, snapshot metrics defaulting to 0"
     fi
 
     METRIC_SERVICE="$SERVICE"
@@ -1315,6 +1313,140 @@ END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
 END_TS=$(date +%s)
 RUNTIME=$((END_TS - START_TS))
+
+# Enhanced height parsing with Docker API fallback to improved log parsing
+get_block_height() {
+    local parsed_height=0
+    local service_logfile=""
+    
+    # Method 1: Try Docker API (most reliable if running)
+    if command -v docker >/dev/null 2>&1; then
+        case "$service" in
+            bitcoind)
+                parsed_height=$(docker exec "$service" bitcoin-cli getblockcount 2>/dev/null | grep -o '[0-9]\+' | head -n1)
+                log_debug "Got Bitcoin height from Docker API: $parsed_height"
+                ;;
+            monerod)
+                parsed_height=$(docker exec "$service" monerod print_height 2>/dev/null | grep -o '[0-9]\+' | head -n1)
+                log_debug "Got Monero height from Docker API: $parsed_height"
+                ;;
+            chia)
+                parsed_height=$(docker exec "$service" chia show --state 2>/dev/null | sed -nE 's/.*Height:[[:space:]]*([0-9]+).*/\1/p')
+                log_debug "Got Chia height from Docker API: $parsed_height"
+                ;;
+        esac
+        
+        if [[ "$parsed_height" -gt 0 ]]; then
+            echo "$parsed_height"
+            return 0
+        fi
+    fi
+    
+    # Method 2: Fallback to improved log parsing
+    log_debug "Falling back to log parsing for $service"
+    
+    case "$service" in
+        bitcoind)
+            service_logfile="${srcdir}/debug.log"
+            if [[ -f "$service_logfile" ]]; then
+                # More robust pattern matching
+                local height_line=$(tail -n100 "$service_logfile" | grep -E "UpdateTip.*height=[0-9]+" | tail -1)
+                if [[ "$height_line" =~ height=([0-9]+) ]]; then
+                    parsed_height="${BASH_REMATCH[1]}"
+                    log_debug "Parsed Bitcoin height: $parsed_height from UpdateTip line"
+                fi
+            fi
+            ;;
+        monerod)
+            service_logfile="${srcdir}/bitmonero.log"
+            if [[ -f "$service_logfile" ]]; then
+                # More robust pattern for Monero
+                local height_line=$(tail -n100 "$service_logfile" | grep -E "Synced[[:space:]]+[0-9]+/[0-9]+" | tail -1)
+                if [[ "$height_line" =~ Synced[[:space:]]+([0-9]+)/[0-9]+ ]]; then
+                    parsed_height="${BASH_REMATCH[1]}"
+                    log_debug "Parsed Monero height: $parsed_height from Synced line"
+                fi
+            fi
+            ;;
+        chia)
+            # Check multiple log locations
+            local chia_logs=(
+                "${srcdir}/.chia/mainnet/log/debug.log"
+                "${srcdir}/.chia/mainnet/log/wallet.log"
+                "${srcdir}/log/debug.log"
+            )
+            
+            for log_file in "${chia_logs[@]}"; do
+                if [[ -f "$log_file" ]]; then
+                    # Try multiple patterns for Chia
+                    local height_line=$(tail -n200 "$log_file" | grep -Ei "(height|block)[[:space:]]*[=:]?[[:space:]]*[0-9]+" | tail -1)
+                    if [[ "$height_line" =~ (height|block)[[:space:]]*[=:]?[[:space:]]*([0-9]+) ]]; then
+                        parsed_height="${BASH_REMATCH[2]}"
+                        log_debug "Parsed Chia height: $parsed_height from $log_file"
+                        break
+                    fi
+                fi
+            done
+            ;;
+        electrs)
+            # electrs doesn't have its own height, try bitcoind
+            local bitcoind_log="${srcdir}/../bitcoind/debug.log"
+            if [[ -f "$bitcoind_log" ]]; then
+                local height_line=$(tail -n100 "$bitcoind_log" | grep -E "UpdateTip.*height=[0-9]+" | tail -1)
+                if [[ "$height_line" =~ height=([0-9]+) ]]; then
+                    parsed_height="${BASH_REMATCH[1]}"
+                    log_debug "Parsed electrs height: $parsed_height from bitcoind log"
+                fi
+            fi
+            ;;
+    esac
+    
+    # Validate and return
+    if [[ "$parsed_height" =~ ^[0-9]+$ ]] && [ "$parsed_height" -gt 0 ]; then
+        echo "$parsed_height"
+        log_debug "Final height result: $parsed_height"
+    else
+        echo "0"
+        log_debug "Failed to parse height, returning 0"
+    fi
+}
+
+# Validate height input
+validate_height() {
+    local input_height="$1"
+    local service_name="$2"
+    
+    case "$service_name" in
+        bitcoind)
+            # Bitcoin height should be 6-8 digits (current ~800k)
+            if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
+                log_error "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
+                return 1
+            fi
+            ;;
+        monerod)
+            # Monero height should be 6-7 digits (current ~3M)
+            if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
+                log_error "Invalid Monero height: $input_height (should be 6-7 digits)"
+                return 1
+            fi
+            ;;
+        chia)
+            # Chia height can vary, use reasonable range
+            if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
+                log_error "Invalid Chia height: $input_height (should be 1-8 digits)"
+                return 1
+            fi
+            ;;
+        *)
+            log_error "Unknown service for height validation: $service_name"
+            return 1
+            ;;
+    esac
+    
+    log_debug "Validated height: $input_height for service: $service_name"
+    return 0
+}
 collect_metrics "$RUNTIME" "$EXIT_CODE"
 telemetry_run_end "$RUNTIME" "$EXIT_CODE"
 log "Script finished successfully"
