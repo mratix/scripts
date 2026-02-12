@@ -12,7 +12,7 @@ set -euo pipefail
 #   - mempool
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
-version="260210-safe"
+version="260212-safe"
 # ============================================================
 
 echo "-------------------------------------------------------------------------------"
@@ -58,7 +58,7 @@ rsync_opts="-avz -P --update --stats --delete --info=progress2"
 validate_height() {
     local input_height="$1"
     local service_name="$2"
-    
+
     case "$service_name" in
         bitcoind)
             # Bitcoin height should be 6-8 digits (current ~800k)
@@ -88,7 +88,7 @@ validate_height() {
             exit 1
         ;;
     esac
-    
+
     log_debug "Validated height: $input_height for service: $service_name"
     return 0
 }
@@ -272,12 +272,12 @@ echo "Checking active service..."
 
     echo "The $service service shutdown and flushing cache takes long time."
     echo "Waiting for graceful shutdown..."
-    
+
     # Wait for service to stop with timeout
     local timeout=300  # 5 minutes max wait
     local elapsed=0
     local check_interval=10
-    
+
     while [ $elapsed -lt $timeout ]; do
         if [ -f "${srcdir}/$service.pid" ]; then
             echo "Wait for process $service to stop... (${elapsed}s elapsed)"
@@ -342,6 +342,75 @@ compare() {
 }
 
 
+# --- get blockchain height from logs
+get_block_height() {
+    local parsed_height=0
+
+    case "$service" in
+        bitcoind)
+            if [ -f "${srcdir}/debug.log" ]; then
+                # Parse height from UpdateTip line: height=936124
+                local update_tip_line=$(tail -n20 "${srcdir}/debug.log" | grep UpdateTip | tail -1)
+                if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
+                    parsed_height="${BASH_REMATCH[1]}"
+                    log_debug "Parsed Bitcoin height: $parsed_height from debug.log"
+                fi
+            fi
+            ;;
+        monerod)
+            if [ -f "${srcdir}/bitmonero.log" ]; then
+                # Parse height from Synced line: Synced 3495136/3608034
+                local synced_line=$(tail -n20 "${srcdir}/bitmonero.log" | grep "Synced" | tail -1)
+                if [[ "$synced_line" =~ Synced\ ([0-9]+)/[0-9]+ ]]; then
+                    parsed_height="${BASH_REMATCH[1]}"
+                    log_debug "Parsed Monero height: $parsed_height from bitmonero.log"
+                fi
+            fi
+            ;;
+        chia)
+            # Chia height parsing - check multiple log locations
+            local chia_log_files=(
+                "${srcdir}/.chia/mainnet/log/debug.log"
+                "${srcdir}/.chia/mainnet/log/wallet.log"
+                "${srcdir}/log/debug.log"
+            )
+
+            for log_file in "${chia_log_files[@]}"; do
+                if [ -f "$log_file" ]; then
+                    # Try to parse height from various chia log patterns
+                    local height_line=$(tail -n50 "$log_file" | grep -E "(height|Height|block|Block)" | tail -1)
+                    if [[ "$height_line" =~ (height|Height)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+                        parsed_height="${BASH_REMATCH[2]}"
+                        log_debug "Parsed Chia height: $parsed_height from $log_file"
+                        break
+                    elif [[ "$height_line" =~ (block|Block)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+                        parsed_height="${BASH_REMATCH[2]}"
+                        log_debug "Parsed Chia block height: $parsed_height from $log_file"
+                        break
+                    fi
+                fi
+            done
+            ;;
+        electrs)
+            # electrs doesn't have direct height in logs, use bitcoind height if available
+            if [ -f "${srcdir}/../bitcoind/debug.log" ]; then
+                local update_tip_line=$(tail -n20 "${srcdir}/../bitcoind/debug.log" | grep UpdateTip | tail -1)
+                if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
+                    parsed_height="${BASH_REMATCH[1]}"
+                    log_debug "Parsed electrs height: $parsed_height from bitcoind debug.log"
+                fi
+            fi
+            ;;
+    esac
+
+    # Validate parsed height is numeric and greater than 0
+    if [[ "$parsed_height" =~ ^[0-9]+$ ]] && [ "$parsed_height" -gt 0 ]; then
+        echo "$parsed_height"
+    else
+        echo "0"
+    fi
+}
+
 # --- pre-tasks, update stamps
 prebackup(){
 cd $srcdir
@@ -353,40 +422,103 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 
-if [[ "$height" -lt 111111 ]]; then
-    # bitcoind
-    [ -f ${srcdir}/debug.log ] && tail -n20 debug.log | grep UpdateTip
-    # todo parse height from log
+    # Service-specific minimum reasonable heights
+    local min_height=0
+    case "$service" in
+        bitcoind) min_height=700000 ;;   # Bitcoin ~800k, min ~700k
+        monerod)  min_height=3000000 ;;  # Monero ~3.5M, min ~3M  
+        chia)     min_height=800000 ;;   # Chia ~834k, min ~800k
+        electrs)   min_height=700000 ;;   # Electrs follows Bitcoin
+        *)         min_height=100000 ;;   # Default fallback
+    esac
 
-    # monerod
-    [ -f ${srcdir}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
-    # todo parse height from log
+    # Check if height needs to be set (either too low or zero)
+    if [[ "$height" -lt "$min_height" ]]; then
+        # Try to auto-detect height from logs
+        local detected_height=$(get_block_height)
+        if [[ "$detected_height" -gt 0 ]]; then
+            echo "Detected blockchain height: $detected_height"
+            echo "Minimum reasonable height for $service: $min_height"
+            read -p "[ ? ] Use detected height? (Y/n): " confirm
+            if [[ "$confirm" != "n" && "$confirm" != "N" ]]; then
+                height="$detected_height"
+            fi
+        else
+            # Show log snippets for manual reference
+            echo "Height too low for $service (minimum: $min_height)"
+            echo "Showing recent log entries for manual height setting:"
+            # bitcoind
+            [ -f ${srcdir}/debug.log ] && tail -n20 debug.log | grep UpdateTip
+            # example line: 2026-02-11T23:43:57Z UpdateTip: new best=000000000000000000015ca4e4a3fa112840d412315e42c4e89ec22dfdcf158f height=936124 version=0x2478c000 log2_work=96.079058 tx=1308589657 date='2026-02-11T23:43:48Z' progress=1.000000 cache=5.1MiB(37068txo)
 
-    # chia
-    # no height in log
-    #[ -f ${srcdir}/.chia/mainnet/log/debug.log ] && tail -n20 ${srcdir}/.chia/mainnet/log/debug.log | grep ...
+            # monerod
+            [ -f ${srcdir}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
+            # example line: 2026-02-11 23:52:18.824	[P2P7]	INFO	global	src/cryptonote_protocol/cryptonote_protocol_handler.inl:1618	Synced 3495136/3608034 (96%, 112898 left, 1% of total synced, estimated 14.1 days left)
 
-    # electrs
-    [ -f ${srcdir}/db/bitcoin/LOG ] && tail -n20 ${srcdir}/db/bitcoin/LOG
-    # todo use height from bitcoind
+            # chia
+            # no parsable height in log file
+            #[ -f ${srcdir}/.chia/mainnet/log/debug.log ] && tail -n20 ${srcdir}/.chia/mainnet/log/debug.log | grep ...
 
-    echo "Remote backuped heights found     : $(ls ${destdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
-    echo "Local working height is           : $(ls ${srcdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
-    echo "------------------------------------------------------------"
-    read -p "[ ? ] Set new Blockchain height   : h" height
-fi
+            # electrs
+            [ -f ${srcdir}/db/bitcoin/LOG ] && tail -n20 ${srcdir}/db/bitcoin/LOG
+        fi
+
+        # Enhanced height file listing with better pattern matching
+        echo "Remote backuped heights found     : $(find ${destdir} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || echo "None")"
+        echo "Local working height is           : $(find ${srcdir} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || echo "None")"
+        echo "Current configured height          : $height"
+        echo "Minimum reasonable height for $service: $min_height"
+        echo "------------------------------------------------------------"
+        read -p "[ ? ] Set new Blockchain height   : h" height
+    fi
+    
+    # Validate height before proceeding
+    if [[ ! "$height" =~ ^[0-9]+$ ]] || [ "$height" -le 0 ]; then
+        echo "[ ! ] Error: Invalid height value '$height'. Must be a positive number."
+        log "$(date +%y%m%d%H%M%S) ! invalid height $height"
+        exit 1
+    fi
+    
     echo "Blockchain height is now          : $height"
 
 echo ""
 echo "Rotate log file started at $(date +%H:%M:%S)"
     cd ${srcdir}
-    mv -u ${srcdir}/h* ${srcdir}/h$height
-    [ -f ${srcdir}/debug.log ] && mv -u ${srcdir}/debug.log ${srcdir}/debug_h$height.log
-    [ -f ${srcdir}/bitmonero.log ] && mv -u ${srcdir}/bitmonero.log ${srcdir}/bitmonero_h$height.log
-    [ -f ${srcdir}/.chia/mainnet/log/debug.log ] && cp -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
-    [ -f ${srcdir}/.chia/mainnet/log/debug.log ] && mv -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
-    [ -f ${srcdir}/db/bitcoin/LOG ] && mv -u ${srcdir}/electrs_h$height.log
-    find ${srcdir}/db/bitcoin/LOG.old* -type f -exec rm {} \;
+    
+    # Validate source directory exists and is writable
+    if [[ ! -w "$srcdir" ]]; then
+        echo "[ ! ] Error: Source directory $srcdir is not writable."
+        log "$(date +%y%m%d%H%M%S) ! srcdir not writable $srcdir"
+        exit 1
+    fi
+    
+    # Move existing height stamp files more safely
+    log_debug "Moving height stamp files to h$height"
+    find ${srcdir} -maxdepth 1 -name "h[0-9]*" -type f -exec mv -u {} ${srcdir}/h$height \; 2>/dev/null || true
+    
+    # Rotate service-specific log files with validation
+    if [ -f ${srcdir}/debug.log ]; then
+        log_debug "Rotating Bitcoin debug log with height $height"
+        mv -u ${srcdir}/debug.log ${srcdir}/debug_h$height.log
+    fi
+    
+    if [ -f ${srcdir}/bitmonero.log ]; then
+        log_debug "Rotating Monero log with height $height"
+        mv -u ${srcdir}/bitmonero.log ${srcdir}/bitmonero_h$height.log
+    fi
+    
+    if [ -f ${srcdir}/.chia/mainnet/log/debug.log ]; then
+        log_debug "Rotating Chia debug log with height $height"
+        mv -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
+    fi
+    
+    if [ -f ${srcdir}/db/bitcoin/LOG ]; then
+        log_debug "Rotating Electrum log with height $height"
+        mv -u ${srcdir}/db/bitcoin/LOG ${srcdir}/electrs_h$height.log
+    fi
+    
+    # Clean up old log files safely
+    find ${srcdir}/db/bitcoin/LOG.old* -type f -exec rm {} \; 2>/dev/null || true
 }
 
 
@@ -433,14 +565,14 @@ elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$force" ]; then
 fi
 
     # machine deop9020m/hpms1
-    [ "$service" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h* mempool.dat peers.dat" ${destdir}/
+    [ "$service" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat" ${destdir}/
     [ "$service" == "bitcoind" ] && cp -u bitcoin.conf ${destdir}/bitcoin.conf.$HOSTNAME
     [ "$service" == "bitcoind" ] && cp -u settings.json ${destdir}/settings.json.$HOSTNAME
     [ "$service" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
     [ "$service" == "bitcoind" ] && [ -f "${srcdir}/indexes/coinstats/db/CURRENT" ] && { folder[3]="indexes"; } || { folder[3]="indexes/blockfilter"; folder[4]="indexes/txindex"; }
 
     # machine hpms1
-    [ "$service" == "monerod" ] && cp -u bitmonero*.log h* p2pstate.* rpc_ssl.* ${destdir}/
+    [ "$service" == "monerod" ] && cp -u "bitmonero*.log h[0-9]* p2pstate.* rpc_ssl.*" ${destdir}/
     [ "$service" == "monerod" ] && folder[1]="lmdb"
     [ "$service" == "chia" ] && { folder[1]=".chia"; folder[2]=".chia_keys"; folder[3]="plots"; }
 
@@ -468,7 +600,7 @@ postbackup(){
 if [[ "$restore" == false ]]; then
     chown -R apps:apps ${srcdir}
     echo ""
-    
+
     # Try to restart service using TrueNAS API
     if command -v midclt >/dev/null 2>&1; then
         echo "Attempting to restart $service via TrueNAS API..."
@@ -546,7 +678,7 @@ arg4="${4:-}"
 [ "$arg1" == "btc" ] || [ "$arg2" == "btc" ] || [ "$arg3" == "btc" ] && service=bitcoind
 [ "$arg1" == "xmr" ] || [ "$arg2" == "xmr" ] || [ "$arg3" == "xmr" ] && service=monerod
 [ "$arg1" == "xch" ] || [ "$arg2" == "xch" ] || [ "$arg3" == "xch" ] && service=chia
-            [ -n "$arg2" ] && { 
+            [ -n "$arg2" ] && {
                 height=$2
                 validate_height "$height" "$service" || exit 1
             }
