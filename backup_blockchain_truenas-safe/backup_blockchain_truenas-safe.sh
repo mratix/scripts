@@ -45,7 +45,6 @@ verbose=false
 debug=false
 height=0
 is_zfs=false
-is_splitted=false
 pool=""
 dataset=""
 srcdir=""
@@ -53,6 +52,9 @@ destdir=""
 folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
 usbdev="/dev/sdf1"
 rsync_opts="-avz -P --update --stats --delete --info=progress2"
+full_mode=false
+target_service=""
+target_host=""
 
 # Validate height input
 validate_height() {
@@ -164,22 +166,78 @@ log "$(date +%y%m%d%H%M%S) script started"
 #deop9020m|btc|bitcoind|tank-deop9020m|false
 #hpms1|btc|bitcoind|ssd|true
 #hpms1|xmr|monerod|ssd|true
+#hpms1|xch|chia|ssd|true
 #"
 
-# machine-dependent - use config-driven approach
-local host_service_key="$(hostname -s)_${arg1}"
-if [[ -n "${SERVICE_CONFIGS[$host_service_key]:-}" ]]; then
-    IFS=':' read -r svc_name split_flag pool_name <<< "${SERVICE_CONFIGS[$host_service_key]}"
-    is_zfs=true
-    service="$svc_name"
-    is_splitted="$split_flag"
-    pool="$pool_name"
-    log "$(date +%y%m%d%H%M%S) host:$(hostname -s) service:$service"
-else
-    echo "[ ! ] Error: Blockchain on this machine not identified. Please define the service(name). Exit."
-    log "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
-    exit 1
+# Enhanced prepare function for single service or full mode
+prepare_single_service() {
+    local blockchain_type="${1:-$target_service}"
+    local hostname_override="${target_host:-$(hostname -s)}"
+    
+    # Map blockchain type to service if needed
+    case "$blockchain_type" in
+        btc) service="bitcoind" ;;
+        xmr) service="monerod" ;;
+        xch) service="chia" ;;
+        *) service="$blockchain_type" ;;
+    esac
+    
+    local host_service_key="${hostname_override}_${blockchain_type}"
+    if [[ -n "${SERVICE_CONFIGS[$host_service_key]:-}" ]]; then
+        IFS=':' read -r svc_name pool_name <<< "${SERVICE_CONFIGS[$host_service_key]}"
+        is_zfs=true
+        service="$svc_name"
+        pool="$pool_name"
+        log "$(date +%y%m%d%H%M%S) host:${hostname_override} service:$service"
+    else
+        echo "[ ! ] Error: Service $blockchain_type not configured for host $hostname_override. Exit."
+        log "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
+        exit 1
+    fi
+    dataset=$pool/blockchain
+}
+
+prepare() {
+echo "Script started at $(date +%H:%M:%S)"
+log "$(date +%y%m%d%H%M%S) script started"
+
+if [[ "$full_mode" == true ]]; then
+    echo "=== FULL MODE: Backup all configured services ==="
+    return
 fi
+
+prepare_single_service
+
+# construct paths
+    nasmount=/mnt/$nashostname/$nasshare # redefine share, recheck is new $nasshare mounted
+    srcdir=/mnt/$dataset/$service
+    destdir=$nasmount/$service
+    [[ "$restore" == true ]] && srcdir=/mnt/$dataset/$service
+# case to usb disk (case restore from network to usb not needed)
+    [[ "$use_usb" == true ]] && destdir=/mnt/usb/$nasshare/$service
+
+    # Use rsync options from config
+    if [[ "$restore" == true ]]; then
+        rsync_opts="${RSYNC_CONFIGS[restore]}"
+    elif [[ -n "${RSYNC_CONFIGS[$service]:-}" ]]; then
+        rsync_opts="${RSYNC_CONFIGS[$service]}"
+    else
+        rsync_opts="-avz -P --update --stats --delete --info=progress2"  # fallback
+    fi
+
+# output results
+    echo "------------------------------------------------------------"
+    echo "Identified blockchain is $service"
+    log "$(date +%y%m%d%H%M%S) blockchain/service=$service"
+
+    echo "Source path     : ${srcdir}"
+    echo "Destination path: ${destdir}"
+    echo "------------------------------------------------------------"
+    log "$(date +%y%m%d%H%M%S) direction $srcdir > $destdir"
+
+    read -r -p "Please check paths. (Autostart in 5 seconds will go to mount destination)" -t 5 -n 1 -s
+mount_dest
+}
     dataset=$pool/blockchain
 
 # construct paths
@@ -426,7 +484,7 @@ fi
     local min_height=0
     case "$service" in
         bitcoind) min_height=700000 ;;   # Bitcoin ~800k, min ~700k
-        monerod)  min_height=3000000 ;;  # Monero ~3.5M, min ~3M  
+        monerod)  min_height=3000000 ;;  # Monero ~3.5M, min ~3M
         chia)     min_height=800000 ;;   # Chia ~834k, min ~800k
         electrs)   min_height=700000 ;;   # Electrs follows Bitcoin
         *)         min_height=100000 ;;   # Default fallback
@@ -471,52 +529,52 @@ fi
         echo "------------------------------------------------------------"
         read -p "[ ? ] Set new Blockchain height   : h" height
     fi
-    
+
     # Validate height before proceeding
     if [[ ! "$height" =~ ^[0-9]+$ ]] || [ "$height" -le 0 ]; then
         echo "[ ! ] Error: Invalid height value '$height'. Must be a positive number."
         log "$(date +%y%m%d%H%M%S) ! invalid height $height"
         exit 1
     fi
-    
+
     echo "Blockchain height is now          : $height"
 
 echo ""
 echo "Rotate log file started at $(date +%H:%M:%S)"
     cd ${srcdir}
-    
+
     # Validate source directory exists and is writable
     if [[ ! -w "$srcdir" ]]; then
         echo "[ ! ] Error: Source directory $srcdir is not writable."
         log "$(date +%y%m%d%H%M%S) ! srcdir not writable $srcdir"
         exit 1
     fi
-    
+
     # Move existing height stamp files more safely
     log_debug "Moving height stamp files to h$height"
     find ${srcdir} -maxdepth 1 -name "h[0-9]*" -type f -exec mv -u {} ${srcdir}/h$height \; 2>/dev/null || true
-    
+
     # Rotate service-specific log files with validation
     if [ -f ${srcdir}/debug.log ]; then
         log_debug "Rotating Bitcoin debug log with height $height"
         mv -u ${srcdir}/debug.log ${srcdir}/debug_h$height.log
     fi
-    
+
     if [ -f ${srcdir}/bitmonero.log ]; then
         log_debug "Rotating Monero log with height $height"
         mv -u ${srcdir}/bitmonero.log ${srcdir}/bitmonero_h$height.log
     fi
-    
+
     if [ -f ${srcdir}/.chia/mainnet/log/debug.log ]; then
         log_debug "Rotating Chia debug log with height $height"
         mv -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
     fi
-    
+
     if [ -f ${srcdir}/db/bitcoin/LOG ]; then
         log_debug "Rotating Electrum log with height $height"
         mv -u ${srcdir}/db/bitcoin/LOG ${srcdir}/electrs_h$height.log
     fi
-    
+
     # Clean up old log files safely
     find ${srcdir}/db/bitcoin/LOG.old* -type f -exec rm {} \; 2>/dev/null || true
 }
@@ -667,22 +725,158 @@ log "$(date +%y%m%d%H%M%S) script end"
 # not args given
 [ $# -eq 0 ] && { echo "Arguments needed: btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|debug|force|mount|umount"; exit 1; }
 
-# parse arguments (not parameters)
-arg1="${1:-}"
-arg2="${2:-}"
-arg3="${3:-}"
-arg4="${4:-}"
-# feed variables logic
-[ "$arg1" == "force" ] || [ "$arg2" == "force" ] || [ "$arg3" == "force" ] && force=true
-[ "$arg1" == "verbose" ] || [ "$arg2" == "verbose" ] || [ "$arg3" == "verbose" ] && verbose=true
-[ "$arg1" == "btc" ] || [ "$arg2" == "btc" ] || [ "$arg3" == "btc" ] && service=bitcoind
-[ "$arg1" == "xmr" ] || [ "$arg2" == "xmr" ] || [ "$arg3" == "xmr" ] && service=monerod
-[ "$arg1" == "xch" ] || [ "$arg2" == "xch" ] || [ "$arg3" == "xch" ] && service=chia
-            [ -n "$arg2" ] && {
-                height=$2
-                validate_height "$height" "$service" || exit 1
-            }
-[ "$arg2" == "usb" ] || [ "$arg3" == "usb" ] && use_usb=true
+# Enhanced argument parsing with getopts
+usage() {
+    echo "Usage: $0 [OPTIONS] [COMMAND] [ARGS]"
+    echo ""
+    echo "COMMANDS:"
+    echo "  btc|xmr|xch              Backup specific blockchain"
+    echo "  bitcoind|monerod|chia  Backup specific service"
+    echo "  restore                   Restore blockchain data"
+    echo "  mount                     Mount backup destination"
+    echo "  umount                    Unmount backup destination"
+    echo "  full|--full              Backup all configured services"
+    echo ""
+    echo "OPTIONS:"
+    echo "  -h, --height N           Set blockchain height (numeric)"
+    echo "  -f, --force              Force operation (bypass safety checks)"
+    echo "  -v, --verbose            Enable verbose output"
+    echo "  -x, --debug              Enable shell debugging"
+    echo "      --usb                 Use USB device instead of network"
+    echo "      --service SERVICE     Target specific service"
+    echo "      --host HOSTNAME      Target specific host (for --full)"
+    echo "  -h, --help               Show this help message"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  $0 btc -h 936125           # Backup Bitcoin at height 936125"
+    echo "  $0 --service monerod -v     # Backup Monero with verbose output"
+    echo "  $0 restore --force         # Force restore operation"
+    echo "  $0 --full --host hpms1    # Backup all services on hpms1"
+    echo ""
+}
+
+# Parse arguments with proper getopts-style parsing
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        # Commands (no arguments)
+        btc|xmr|xch)
+            [[ -n "$target_service" ]] && { echo "Error: Multiple blockchain types specified"; usage; exit 1; }
+            target_service="$1"
+            case "$1" in
+                btc) service="bitcoind" ;;
+                xmr) service="monerod" ;;
+                xch) service="chia" ;;
+            esac
+            shift
+            ;;
+        bitcoind|monerod|chia|electrs|mempool)
+            [[ -n "$target_service" ]] && { echo "Error: Multiple services specified"; usage; exit 1; }
+            target_service="$1"
+            service="$1"
+            shift
+            ;;
+        restore)
+            restore=true
+            shift
+            ;;
+        mount)
+            mount_dest
+            exit 0
+            ;;
+        umount)
+            unmount_dest
+            exit 0
+            ;;
+        # Options (require arguments)
+        -h|--height)
+            [[ -z "${2:-}" ]] && { echo "Error: --height requires a value"; usage; exit 1; }
+            height="$2"
+            shift 2
+            ;;
+        --service)
+            [[ -z "${2:-}" ]] && { echo "Error: --service requires a value"; usage; exit 1; }
+            service="$2"
+            target_service="$2"
+            shift 2
+            ;;
+        --host)
+            [[ -z "${2:-}" ]] && { echo "Error: --host requires a value"; usage; exit 1; }
+            target_host="$2"
+            shift 2
+            ;;
+        --usb)
+            use_usb=true
+            shift
+            ;;
+        # Boolean flags
+        -f|--force)
+            force=true
+            shift
+            ;;
+        -v|--verbose)
+            verbose=true
+            LOGGER=/usr/bin/logger
+            log "$(date +%y%m%d%H%M%S) verbose now enabled"
+            shift
+            ;;
+        -x|--debug)
+            set -x
+            shift
+            ;;
+        # Aliases and special cases
+        full|-a|--full)
+            full_mode=true
+            shift
+            ;;
+        help|--help|-h)
+            usage
+            exit 0
+            ;;
+        ver|version|--version)
+            echo "$version"
+            exit 0
+            ;;
+        # Legacy/positional argument support
+        *)
+            # Handle positional arguments for backward compatibility
+            if [[ -z "$target_service" ]] && [[ "$1" =~ ^(btc|xmr|xch|bitcoind|monerod|chia)$ ]]; then
+                target_service="$1"
+                case "$1" in
+                    btc) service="bitcoind" ;;
+                    xmr) service="monerod" ;;
+                    xch) service="chia" ;;
+                    *) service="$1" ;;
+                esac
+                shift
+            elif [[ "$1" =~ ^[0-9]+$ ]]; then
+                height="$1"
+                shift
+            elif [[ "$1" == "force" ]]; then
+                force=true
+                shift
+            elif [[ "$1" == "verbose" ]]; then
+                verbose=true
+                LOGGER=/usr/bin/logger
+                log "$(date +%y%m%d%H%M%S) verbose now enabled"
+                shift
+            elif [[ "$1" == "usb" ]]; then
+                use_usb=true
+                shift
+            else
+                echo "Error: Unknown option '$1'"
+                usage
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+# Validate arguments if service was specified
+if [[ -n "$service" ]]; then
+    if [[ "$height" -gt 0 ]]; then
+        validate_height "$height" "$service" || exit 1
+    fi
+fi
 
 case "$1" in
         btc|bitcoind|xmr|monerod|xch|chia)
@@ -725,36 +919,178 @@ case "$1" in
             --debug|-x)
             set -x
         ;;
-        all|-a|full|--full)
-            force=false
-            verbose=false
-            restore=false
-		# todo schleife loop services
-	    prepare
-            backup_blockchain
-            postbackup # service restart
-            #unmount_dest
-        ;;
         mount)
             mount_dest
-        ;;
+            ;;
         umount)
             unmount_dest
-        ;;
-        help|--help)
-            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
+            ;;
+        help|--help|-h)
+            usage
             exit 0
             ;;
         ver|version|--version)
-            echo $version
+            echo "$version"
             exit 0
             ;;
         *)
             # undefined case, exit with error
-            echo "Error: Invalid argument "$1""
-            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
+            echo "Error: Invalid argument '$1'"
+            usage
             exit 1
-esac
+            ;;
+    esac
+
+# --- full mode implementation
+backup_all_services() {
+    echo "=== BACKUP ALL CONFIGURED SERVICES ==="
+    
+    # Get all available service configurations
+    local all_services=()
+    local hostname_target="${target_host:-$(hostname -s)}"
+    
+    for config_key in "${!SERVICE_CONFIGS[@]}"; do
+        # Extract hostname from config key (hostname_service)
+        local config_host="${config_key%_*}"
+        if [[ "$config_host" == "$hostname_target" ]]; then
+            local service_config="${SERVICE_CONFIGS[$config_key]}"
+            IFS=':' read -r svc_name pool_name <<< "$service_config"
+            all_services+=("$svc_name:$pool_name")
+        fi
+    done
+    
+    if [[ ${#all_services[@]} -eq 0 ]]; then
+        echo "[ ! ] No services configured for host: $hostname_target"
+        exit 1
+    fi
+    
+    echo "Found services to backup:"
+    for service_entry in "${all_services[@]}"; do
+        IFS=':' read -r svc_name pool_name <<< "$service_entry"
+        echo "  - $svc_name (pool: $pool_name)"
+    done
+    
+    echo "------------------------------------------------------------"
+    echo "Starting full backup of all services..."
+    
+    # Backup each service
+    for service_entry in "${all_services[@]}"; do
+        IFS=':' read -r svc_name pool_name <<< "$service_entry"
+        
+        echo ""
+        echo "=== Backing up service: $svc_name ==="
+        
+        # Set global variables for this service
+        service="$svc_name"
+        pool="$pool_name"
+        dataset="$pool/blockchain"
+        is_zfs=true
+        
+        # Reset height for each service
+        height=0
+        
+        # Set paths for this service
+        nasmount=/mnt/$nashostname/$nasshare
+        srcdir=/mnt/$dataset/$service
+        destdir=$nasmount/$service
+        [[ "$restore" == true ]] && srcdir=/mnt/$dataset/$service
+        [[ "$use_usb" == true ]] && destdir=/mnt/usb/$nasshare/$service
+        
+        # Set rsync options
+        if [[ "$restore" == true ]]; then
+            rsync_opts="${RSYNC_CONFIGS[restore]}"
+        elif [[ -n "${RSYNC_CONFIGS[$service]:-}" ]]; then
+            rsync_opts="${RSYNC_CONFIGS[$service]}"
+        else
+            rsync_opts="-avz -P --update --stats --delete --info=progress2"
+        fi
+        
+        # Run backup workflow for this service
+        prestop
+        prebackup
+        snapshot
+        backup_blockchain_single
+        postbackup
+        
+        echo "[ OK] Service $svc_name backup completed."
+        echo "------------------------------------------------------------"
+    done
+    
+    echo "=== ALL SERVICES BACKUP COMPLETED ==="
+}
+
+# Single service backup function (extracted from backup_blockchain)
+backup_blockchain_single() {
+    # This is the original backup_blockchain logic for single service
+    cd $srcdir
+
+echo ""
+echo "Main task started at $(date +%H:%M:%S)"
+log "$(date +%y%m%d%H%M%S) start task backup pre"
+
+# Ensure both timestamps are valid numbers
+if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
+    echo "[ ! ] Error: One of the timestamps is missing or invalid."
+    exit 1
+fi
+
+# Prevent overwrite if destination is newer (and no force flag set)
+if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$force" ]; then
+    echo "[ ! ] Destination is newer (and maybe higher) than the source."
+    echo "      Better use restore. A force will ignore this situation. End."
+    log "$(date +%y%m%d%H%M%S) ! src-dest comparing triggers abort"
+    exit 1
+elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$force" ]; then
+    echo "[ ! ] Destination is newer than the source."
+    echo "      Force will now overwrite it. This will downgrade the destination."
+    log "$(date +%y%m%d%H%M%S) src-dest downgrade forced"
+fi
+
+    # Service-specific file copying and folder setup
+    if [ "$service" == "bitcoind" ]; then
+        cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat" ${destdir}/
+        cp -u bitcoin.conf ${destdir}/bitcoin.conf.$HOSTNAME
+        cp -u settings.json ${destdir}/settings.json.$HOSTNAME
+        folder[1]="blocks"; folder[2]="chainstate"
+        [ -f "${srcdir}/indexes/coinstats/db/CURRENT" ] && folder[3]="indexes" || { folder[3]="indexes/blockfilter"; folder[4]="indexes/txindex"; }
+    elif [ "$service" == "monerod" ]; then
+        cp -u "bitmonero*.log h[0-9]* p2pstate.* rpc_ssl.*" ${destdir}/
+        folder[1]="lmdb"
+    elif [ "$service" == "chia" ]; then
+        folder[1]=".chia"; folder[2]=".chia_keys"; folder[3]="plots"
+    fi
+
+i=1
+while [ "${folder[i]}" != "" ]; do
+    echo "------------------------------------------------------------"
+    echo "Start backup job: $service/${folder[i]}"
+    log "$(date +%y%m%d%H%M%S) start task backup main"
+    ionice -c 2 \
+    rsync \
+        ${rsync_opts} \
+        --exclude '.nobakup' \
+        ${srcdir}/${folder[i]}/ ${destdir}/${folder[i]}/
+    [ $? -ne 0 ] && echo "[ ! ] Errors during backup ${destdir}/${folder[i]}." && log "$(date +%y%m%d%H%M%S) ! task backup ${folder[i]} fail"
+    sync
+    ((i++))
+done
+echo "------------------------------------------------------------"
+log "$(date +%y%m%d%H%M%S) end task backup main"
+}
+
+# --- main execution logic
+if [[ "$full_mode" == true ]]; then
+    backup_all_services
+else
+    # Single service mode
+    prepare
+    prestop
+    prebackup
+    snapshot
+    backup_blockchain_single
+    postbackup
+fi
+
 # --- main logic end
 exit
 
