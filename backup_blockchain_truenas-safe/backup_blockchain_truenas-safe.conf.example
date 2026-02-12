@@ -1,0 +1,53 @@
+#!/bin/bash
+# ============================================================
+# backup_blockchain_config.sh
+# Configuration file for blockchain backup scripts
+# ============================================================
+
+# --- Network Configuration ---
+NAS_USER="your_username"
+NAS_HOST="192.168.1.100"
+NAS_HOSTNAME="cronas"
+NAS_SHARE="blockchain"
+
+# --- USB Configuration ---
+USB_DEVICE="/dev/sdf1"
+USB_MOUNT_POINT="/mnt/usb"
+
+# --- Default Paths ---
+MOUNT_BASE="/mnt"
+DEFAULT_MOUNTPATH="/mnt/\${NAS_HOSTNAME}/\${NAS_SHARE}"
+
+# --- Service Configurations ---
+declare -A SERVICE_CONFIGS
+SERVICE_CONFIGS[deop9020m_btc]="bitcoind: false: tank-deop9020m"
+SERVICE_CONFIGS[hpms1_btc]="bitcoind: true: ssd"
+SERVICE_CONFIGS[hpms1_xmr]="monerod: true: ssd"
+SERVICE_CONFIGS[hpms1_xch]="chia: true: ssd"
+
+# --- Security Settings ---
+ALLOWED_MOUNT_PATHS="/mnt /home /var"
+FORBIDDEN_PATHS="/ /bin /sbin /usr /etc /boot /sys /proc /dev /media"
+
+# --- Rsync Options ---
+declare -A RSYNC_CONFIGS
+RSYNC_CONFIGS[bitcoind]="-avihH -P --fsync --mkpath --stats --delete"
+RSYNC_CONFIGS[monerod]="-a -P --numeric-ids --delete --info=progress2 --no-compress"
+RSYNC_CONFIGS[chia]="-avz -P --update --stats --delete --info=progress2"
+RSYNC_CONFIGS[restore]="-avz -P --append-verify --info=progress2"
+
+# --- Logging Configuration ---
+LOG_FORMAT="%Y-%m-%d %H:%M:%S"
+LOG_LEVELS="DEBUG VERBOSE INFO WARN ERROR"
+
+# --- Timeout Settings ---
+NETWORK_TIMEOUT=5
+MOUNT_TIMEOUT=10
+SYNC_TIMEOUT=30
+
+# --- File Extensions to Monitor ---
+EXECUTABLE_EXTENSIONS=".sh .exe .bat .com .cmd"
+
+# --- Backup Validation ---
+ENABLE_INTEGRITY_CHECK=true
+BACKUP_RETENTION_DAYS=30

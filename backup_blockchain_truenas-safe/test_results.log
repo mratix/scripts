@@ -1,0 +1,22 @@
+[1;33m[INFO][0m Running basic tests...
+[0;32m[TEST][0m Running: Script exists
+[0;32m[TEST][0m Running: Config file exists
+[0;32m[TEST][0m Running: Script is executable
+[0;32m[TEST][0m Running: Config file has valid bash syntax
+[0;32m[TEST][0m Running: Script has valid bash syntax
+[1;33m[INFO][0m Running functionality tests...
+[0;32m[TEST][0m Running: Help command works
+[0;32m[TEST][0m Running: Version command works
+[0;32m[TEST][0m Running: Invalid arguments exit with error
+[1;33m[INFO][0m Running validation tests...
+[0;32m[TEST][0m Running: Valid Bitcoin height accepted
+[0;32m[TEST][0m Running: Invalid Bitcoin height rejected
+[0;32m[TEST][0m Running: Valid Monero height accepted
+[0;32m[TEST][0m Running: Invalid Monero height rejected
+[1;33m[INFO][0m Running configuration tests...
+[0;32m[TEST][0m Running: Config variables are loadable
+[0;32m[TEST][0m Running: Service mappings exist in config
+[0;32m[TEST][0m Running: Rsync options exist in config
+[1;33m[INFO][0m Running integration tests...
+[1;33m[INFO][0m Note: Service detection test requires proper environment setup
+[1;33m[INFO][0m Note: Mount functionality test requires root privileges

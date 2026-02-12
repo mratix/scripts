@@ -1,0 +1,634 @@
+#!/bin/bash
+set -euo pipefail
+# ============================================================
+# backup_blockchain_truenas-safe.sh
+# Backup & restore script for blockchain on TrueNAS Scale (safe version)
+#
+# Supported services:
+#   - bitcoind
+#   - monerod
+#   - chia
+#   - electrs
+#   - mempool
+#
+# Author: mratix, 1644259+mratix@users.noreply.github.com
+version="260210-safe"
+# ============================================================
+
+echo "-------------------------------------------------------------------------------"
+echo "Backup blockchain and or services to NAS/USB (safe version)"
+
+# --- config
+LOGGER=/usr/bin/logger
+nasuser=your_username
+nashost=192.168.1.100
+nashostname=cronas
+nasshare=blockchain
+
+# Load external configuration if available
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+CONFIG_FILE="${SCRIPT_DIR}/backup_blockchain_truenas-safe.conf"
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
+# --- runtime defaults
+today=$(date +%y%m%d)
+now=$(date +%y%m%d%H%M%S)
+nasmount=/mnt/$nashostname/$nasshare
+service=""
+restore=false
+is_mounted=false
+use_usb=false
+force=false
+verbose=false
+debug=false
+height=0
+is_zfs=false
+is_splitted=false
+pool=""
+dataset=""
+srcdir=""
+destdir=""
+folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
+usbdev="/dev/sdf1"
+rsync_opts="-avz -P --update --stats --delete --info=progress2"
+
+# Validate height input
+validate_height() {
+    local input_height="$1"
+    local service_name="$2"
+    
+    case "$service_name" in
+        bitcoind)
+            # Bitcoin height should be 6-8 digits (current ~800k)
+            if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
+                log_error "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
+                return 1
+            fi
+            ;;
+        monerod)
+            # Monero height should be 6-7 digits (current ~3M)
+            if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
+                log_error "Invalid Monero height: $input_height (should be 6-7 digits)"
+                return 1
+            fi
+            ;;
+        chia)
+            # Chia height can vary, use reasonable range
+            if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
+                log_error "Invalid Chia height: $input_height (should be 1-8 digits)"
+                return 1
+            fi
+            ;;
+        *)
+            # undefined case, exit with error
+            echo "Error: Invalid argument '$1'"
+            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
+            exit 1
+        ;;
+    esac
+    
+    log_debug "Validated height: $input_height for service: $service_name"
+    return 0
+}
+
+# --- logger
+log_info() { echo "$(date +'%Y-%m-%d %H:%M:%S') [INFO] $*"; }
+log_warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') [WARN] $*"; }
+log_error() { echo "$(date +'%Y-%m-%d %H:%M:%S') [ERROR] $*" >&2; }
+log_debug() { [[ "${verbose:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') [DEBUG] $*"; }
+log() { log_info "$1"; }
+
+
+# --- mount destination
+mount_dest(){
+[ ! -d "$nasmount" ] && mkdir -p $nasmount
+if [[ "$use_usb" == true ]]; then
+    mount_usb
+else
+    # mount nas share
+    mount | grep $nasmount >/dev/null
+    [ $? -eq 0 ] || mount -t cifs -o user=$nasuser //$nashost/$nasshare $nasmount
+    sleep 2
+    [ -f "$nasmount/$nashostname.dummy" ] && [ -f "$nasmount/dir.dummy" ] && echo "Network share $nasmount is mounted and valid backup storage."
+        if [ ! -w "$nasmount/" ]; then
+            echo "[ ! ] Error: Destination $nasmount on //$nashost/$nasshare is NOT writable! Exit."
+            log "$(date +%y%m%d%H%M%S) ! share $nasmount write permissions deny"
+            destdir=/dev/null
+            exit 127
+        else
+            is_mounted=true
+            log "$(date +%y%m%d%H%M%S) share $nasmount mounted, validated"
+        fi
+fi
+}
+
+
+# --- mount usb device
+mount_usb(){
+    # nasmount=/mnt/usb/$nasshare # was set before
+    [ ! -d "/mnt/usb" ] && mkdir -p /mnt/usb
+    mount | grep /mnt/usb >/dev/null
+    [ $? -eq 0 ] || mount $usbdev /mnt/usb
+    sleep 2
+    [ ! -f "$nasmount/usb.dummy" ] && { echo "[ ! ] Error: Mounted disk is not valid and or not prepared as backup storage! Exit."; exit 127; }
+        if [ ! -w "$nasmount/" ]; then
+            echo "[ ! ] Error: Disk $nasmount is NOT writable! Exit."
+            log "$(date +%y%m%d%H%M%S) ! usb $nasmount write permissions deny"
+            destdir=/dev/null
+            exit 127
+        fi
+    is_mounted=true
+    echo "USB disk is (now) mounted and valid backup storage."
+    log "$(date +%y%m%d%H%M%S) usb $nasmount mounted, valid"
+}
+
+
+# --- unmount destination
+unmount_dest(){
+        sync
+        df -h | grep $nasshare
+        mount | grep $nasmount >/dev/null
+        [ $? -eq 0 ] && umount $nasmount || is_mounted=false
+}
+
+
+# --- evaluate environment
+prepare(){
+echo "Script started at $(date +%H:%M:%S)"
+log "$(date +%y%m%d%H%M%S) script started"
+
+# host|arg|service|pool|splitted
+#MAP="
+#deop9020m|btc|bitcoind|tank-deop9020m|false
+#hpms1|btc|bitcoind|ssd|true
+#hpms1|xmr|monerod|ssd|true
+#"
+
+# machine-dependent - use config-driven approach
+local host_service_key="$(hostname -s)_${arg1}"
+if [[ -n "${SERVICE_CONFIGS[$host_service_key]:-}" ]]; then
+    IFS=':' read -r svc_name split_flag pool_name <<< "${SERVICE_CONFIGS[$host_service_key]}"
+    is_zfs=true
+    service="$svc_name"
+    is_splitted="$split_flag"
+    pool="$pool_name"
+    log "$(date +%y%m%d%H%M%S) host:$(hostname -s) service:$service"
+else
+    echo "[ ! ] Error: Blockchain on this machine not identified. Please define the service(name). Exit."
+    log "$(date +%y%m%d%H%M%S) ! wrong blockchain $service for this host (not in definition)"
+    exit 1
+fi
+    dataset=$pool/blockchain
+
+# construct paths
+    nasmount=/mnt/$nashostname/$nasshare # redefine share, recheck is the new $nasshare mounted
+    srcdir=/mnt/$dataset/$service
+    destdir=$nasmount/$service
+    [[ "$restore" == true ]] && srcdir=/mnt/$dataset/$service
+# case to usb disk (case restore from network to usb not needed)
+    [[ "$use_usb" == true ]] && destdir=/mnt/usb/$nasshare/$service
+
+    # Use rsync options from config
+    if [[ "$restore" == true ]]; then
+        rsync_opts="${RSYNC_CONFIGS[restore]}"
+    elif [[ -n "${RSYNC_CONFIGS[$service]:-}" ]]; then
+        rsync_opts="${RSYNC_CONFIGS[$service]}"
+    else
+        rsync_opts="-avz -P --update --stats --delete --info=progress2"  # fallback
+    fi
+
+# output results
+    echo "------------------------------------------------------------"
+    echo "Identified blockchain is $service"
+    log "$(date +%y%m%d%H%M%S) blockchain/service=$service"
+
+    echo "Source path     : ${srcdir}"
+    echo "Destination path: ${destdir}"
+    echo "------------------------------------------------------------"
+    log "$(date +%y%m%d%H%M%S) direction $srcdir > $destdir"
+
+    read -r -p "Please check paths. (Autostart in 5 seconds will go to mount destination)" -t 5 -n 1 -s
+mount_dest
+}
+
+
+# --- pre-tasks, stop service
+prestop(){
+log "$(date +%y%m%d%H%M%S) try stop $service"
+
+echo "Attempting to stop $service via TrueNAS API..."
+
+# Try to stop service using TrueNAS API
+if command -v midclt >/dev/null 2>&1; then
+    case "$service" in
+        bitcoind)
+            # Try different naming conventions
+            release_names=("${service}-knots" "bitcoin-knots" "bitcoind" "bitcoin")
+            for release_name in "${release_names[@]}"; do
+                if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
+                    echo "Found release: $release_name, stopping..."
+                    if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
+                        echo "[ OK] Service $release_name scaling down via API."
+                        log "$(date +%y%m%d%H%M%S) $release_name stopped via API"
+                        break
+                    fi
+                fi
+            done
+            ;;
+        monerod)
+            release_names=("${service}" "monero" "monerod-knots")
+            for release_name in "${release_names[@]}"; do
+                if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
+                    echo "Found release: $release_name, stopping..."
+                    if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
+                        echo "[ OK] Service $release_name scaling down via API."
+                        log "$(date +%y%m%d%H%M%S) $release_name stopped via API"
+                        break
+                    fi
+                fi
+            done
+            ;;
+        chia)
+            release_names=("${service}" "chia-blockchain" "chia-mainnet")
+            for release_name in "${release_names[@]}"; do
+                if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
+                    echo "Found release: $release_name, stopping..."
+                    if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
+                        echo "[ OK] Service $release_name scaling down via API."
+                        log "$(date +%y%m%d%H%M%S) $release_name stopped via API"
+                        break
+                    fi
+                fi
+            done
+            ;;
+    esac
+else
+    echo "[ ! ] midclt command not found, falling back to manual intervention"
+fi
+
+echo "Checking active service..."
+
+    echo "The $service service shutdown and flushing cache takes long time."
+    echo "Waiting for graceful shutdown..."
+    
+    # Wait for service to stop with timeout
+    local timeout=300  # 5 minutes max wait
+    local elapsed=0
+    local check_interval=10
+    
+    while [ $elapsed -lt $timeout ]; do
+        if [ -f "${srcdir}/$service.pid" ]; then
+            echo "Wait for process $service to stop... (${elapsed}s elapsed)"
+            sleep $check_interval
+            ((elapsed += check_interval))
+        else
+            echo "Great, service is now down."
+            break
+        fi
+    done
+
+# --- service check, final verification
+if [ -f "${srcdir}/$service.pid" ]; then
+    echo "[ ! ] Warning: Service may still be running after $timeout seconds."
+    echo "[ ! ] Please verify manually that ${service} is stopped before proceeding."
+    read -r -p "Continue anyway? (y/N): " -t 30 confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "[ ! ] Aborting due to potentially running service."
+        log "$(date +%y%m%d%H%M%S) ! abort: service still running"
+        exit 1
+    fi
+else
+    echo "[ OK ] Service $service is down."
+fi
+
+echo "------------------------------------------------------------"
+}
+
+
+latest_manifest() {
+    # Take only the latest MANIFEST file
+    ls -1t "$1"/chainstate/MANIFEST-* 2>/dev/null | head -n1
+}
+
+# --- compare src-dest times
+compare() {
+    if [ "$service" = "bitcoind" ]; then
+        srcfile=$(latest_manifest "$srcdir")
+        destfile=$(latest_manifest "$destdir")
+    elif [ "$service" = "monerod" ]; then
+        srcfile="$srcdir/lmdb/data.mdb"
+        destfile="$destdir/lmdb/data.mdb"
+    elif [ "$service" = "chia" ]; then
+        srcfile="$srcdir/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
+        destfile="$destdir/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
+    fi
+
+    srcsynctime=$(stat -c %Y "$srcfile")
+    destsynctime=$(stat -c %Y "$destfile")
+
+    echo "------------------------------------------------------------"
+    echo "Remote backup : $(date -d "@$destsynctime")"
+    echo "Local data    : $(date -d "@$srcsynctime")"
+    if (( destsynctime > srcsynctime )); then
+        echo "Attention: Remote backup is newer than local data."
+    fi
+    if [ "$destfile" -nt "$srcfile" ]; then
+        return 1    # backup newer
+    else
+        return 0    # local newer or equal
+    fi
+}
+
+
+# --- pre-tasks, update stamps
+prebackup(){
+cd $srcdir
+
+compare
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "Remote holds newer data. Prevent overwrite, stopping."
+    exit 1
+fi
+
+if [[ "$height" -lt 111111 ]]; then
+    # bitcoind
+    [ -f ${srcdir}/debug.log ] && tail -n20 debug.log | grep UpdateTip
+    # todo parse height from log
+
+    # monerod
+    [ -f ${srcdir}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
+    # todo parse height from log
+
+    # chia
+    # no height in log
+    #[ -f ${srcdir}/.chia/mainnet/log/debug.log ] && tail -n20 ${srcdir}/.chia/mainnet/log/debug.log | grep ...
+
+    # electrs
+    [ -f ${srcdir}/db/bitcoin/LOG ] && tail -n20 ${srcdir}/db/bitcoin/LOG
+    # todo use height from bitcoind
+
+    echo "Remote backuped heights found     : $(ls ${destdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
+    echo "Local working height is           : $(ls ${srcdir}/h* | xargs -n 1 basename | sed -e 's/\..*$//')"
+    echo "------------------------------------------------------------"
+    read -p "[ ? ] Set new Blockchain height   : h" height
+fi
+    echo "Blockchain height is now          : $height"
+
+echo ""
+echo "Rotate log file started at $(date +%H:%M:%S)"
+    cd ${srcdir}
+    mv -u ${srcdir}/h* ${srcdir}/h$height
+    [ -f ${srcdir}/debug.log ] && mv -u ${srcdir}/debug.log ${srcdir}/debug_h$height.log
+    [ -f ${srcdir}/bitmonero.log ] && mv -u ${srcdir}/bitmonero.log ${srcdir}/bitmonero_h$height.log
+    [ -f ${srcdir}/.chia/mainnet/log/debug.log ] && cp -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
+    [ -f ${srcdir}/.chia/mainnet/log/debug.log ] && mv -u ${srcdir}/.chia/mainnet/log/debug.log ${srcdir}/.chia/mainnet/log/debug_h$height.log
+    [ -f ${srcdir}/db/bitcoin/LOG ] && mv -u ${srcdir}/electrs_h$height.log
+    find ${srcdir}/db/bitcoin/LOG.old* -type f -exec rm {} \;
+}
+
+
+# --- snapshot
+snapshot(){
+echo "Hint: Best time to take a snapshot is now."
+# snapshot zfs dataset
+if [ "$is_zfs" ]; then
+    echo "Prepare dataset $dataset for a snapshot..."
+    sync
+    sleep 1
+    snapname="script-$(date +%Y-%m-%d_%H-%M)"
+    zfs snapshot -r ${dataset}@${snapname}
+    echo "[ OK] Snapshot '$snapname' was taken."
+    log "$(date +%y%m%d%H%M%S) snapshot $snapname taken"
+fi
+}
+
+
+# --- main rsync job
+backup_blockchain(){
+cd $srcdir
+
+echo ""
+echo "Main task started at $(date +%H:%M:%S)"
+log "$(date +%y%m%d%H%M%S) start task backup pre"
+
+# Ensure both timestamps are valid numbers
+if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
+    echo "[ ! ] Error: One of the timestamps is missing or invalid."
+    exit 1
+fi
+
+# Prevent overwrite if destination is newer (and no force flag set)
+if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$force" ]; then
+    echo "[ ! ] Destination is newer (and maybe higher) than the source."
+    echo "      Better use restore. A force will ignore this situation. End."
+    log "$(date +%y%m%d%H%M%S) ! src-dest comparing triggers abort"
+    exit 1
+elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$force" ]; then
+    echo "[ ! ] Destination is newer than the source."
+    echo "      Force will now overwrite it. This will downgrade the destination."
+    log "$(date +%y%m%d%H%M%S) src-dest downgrade forced"
+fi
+
+    # machine deop9020m/hpms1
+    [ "$service" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h* mempool.dat peers.dat" ${destdir}/
+    [ "$service" == "bitcoind" ] && cp -u bitcoin.conf ${destdir}/bitcoin.conf.$HOSTNAME
+    [ "$service" == "bitcoind" ] && cp -u settings.json ${destdir}/settings.json.$HOSTNAME
+    [ "$service" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
+    [ "$service" == "bitcoind" ] && [ -f "${srcdir}/indexes/coinstats/db/CURRENT" ] && { folder[3]="indexes"; } || { folder[3]="indexes/blockfilter"; folder[4]="indexes/txindex"; }
+
+    # machine hpms1
+    [ "$service" == "monerod" ] && cp -u bitmonero*.log h* p2pstate.* rpc_ssl.* ${destdir}/
+    [ "$service" == "monerod" ] && folder[1]="lmdb"
+    [ "$service" == "chia" ] && { folder[1]=".chia"; folder[2]=".chia_keys"; folder[3]="plots"; }
+
+i=1
+while [ "${folder[i]}" != "" ]; do
+    echo "------------------------------------------------------------"
+    echo "Start backup job: $service/${folder[i]}"
+    log "$(date +%y%m%d%H%M%S) start task backup main"
+    ionice -c 2 \
+    rsync \
+        ${rsync_opts} \
+        --exclude '.nobakup' \
+        ${srcdir}/${folder[i]}/ ${destdir}/${folder[i]}/
+    [ $? -ne 0 ] && echo "[ ! ] Errors during backup ${destdir}/${folder[i]}." && log "$(date +%y%m%d%H%M%S) ! task backup ${folder[i]} fail"
+    sync
+    ((i++))
+done
+echo "------------------------------------------------------------"
+log "$(date +%y%m%d%H%M%S) end task backup main"
+}
+
+
+# --- postbackup tasks, restart service
+postbackup(){
+if [[ "$restore" == false ]]; then
+    chown -R apps:apps ${srcdir}
+    echo ""
+    
+    # Try to restart service using TrueNAS API
+    if command -v midclt >/dev/null 2>&1; then
+        echo "Attempting to restart $service via TrueNAS API..."
+        case "$service" in
+            bitcoind)
+                release_names=("${service}-knots" "bitcoin-knots" "bitcoind" "bitcoin")
+                for release_name in "${release_names[@]}"; do
+                    if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
+                        echo "Found release: $release_name, restarting..."
+                        if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
+                            echo "[ OK] Service $release_name scaling up via API."
+                            log "$(date +%y%m%d%H%M%S) $release_name restarted via API"
+                            break
+                        fi
+                    fi
+                done
+                ;;
+            monerod)
+                release_names=("${service}" "monero" "monerod-knots")
+                for release_name in "${release_names[@]}"; do
+                    if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
+                        echo "Found release: $release_name, restarting..."
+                        if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
+                            echo "[ OK] Service $release_name scaling up via API."
+                            log "$(date +%y%m%d%H%M%S) $release_name restarted via API"
+                            break
+                        fi
+                    fi
+                done
+                ;;
+            chia)
+                release_names=("${service}" "chia-blockchain" "chia-mainnet")
+                for release_name in "${release_names[@]}"; do
+                    if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
+                        echo "Found release: $release_name, restarting..."
+                        if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
+                            echo "[ OK] Service $release_name scaling up via API."
+                            log "$(date +%y%m%d%H%M%S) $release_name restarted via API"
+                            break
+                        fi
+                    fi
+                done
+                ;;
+        esac
+    else
+        echo "[ ! ] midclt command not found, please restart $service manually"
+    fi
+else
+    chown -R apps ${destdir}
+        # no service start after restore
+    echo "Restore task finished. Check the result in ${destdir}."
+    echo "Service $service will not automatically restarted."
+fi
+
+echo "Script ended at $(date +%H:%M:%S)"
+echo "End."
+echo "------------------------------------------------------------"
+log "$(date +%y%m%d%H%M%S) script end"
+}
+
+
+# --- main logic
+
+# not args given
+[ $# -eq 0 ] && { echo "Arguments needed: btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|debug|force|mount|umount"; exit 1; }
+
+# parse arguments (not parameters)
+arg1="${1:-}"
+arg2="${2:-}"
+arg3="${3:-}"
+arg4="${4:-}"
+# feed variables logic
+[ "$arg1" == "force" ] || [ "$arg2" == "force" ] || [ "$arg3" == "force" ] && force=true
+[ "$arg1" == "verbose" ] || [ "$arg2" == "verbose" ] || [ "$arg3" == "verbose" ] && verbose=true
+[ "$arg1" == "btc" ] || [ "$arg2" == "btc" ] || [ "$arg3" == "btc" ] && service=bitcoind
+[ "$arg1" == "xmr" ] || [ "$arg2" == "xmr" ] || [ "$arg3" == "xmr" ] && service=monerod
+[ "$arg1" == "xch" ] || [ "$arg2" == "xch" ] || [ "$arg3" == "xch" ] && service=chia
+            [ -n "$arg2" ] && { 
+                height=$2
+                validate_height "$height" "$service" || exit 1
+            }
+[ "$arg2" == "usb" ] || [ "$arg3" == "usb" ] && use_usb=true
+
+case "$1" in
+        btc|bitcoind|xmr|monerod|xch|chia)
+            # default case
+            [ -z "$height" ] && height=0 # preset
+            [ -n "$arg2" ] && height=$2 # todo check for numeric format
+            [[ "$use_usb" == true ]] && nasmount=/mnt/usb/$nasshare
+            [ "$verbose" ] && echo "verbose 1:$arg1 2:$arg2 3:$arg3 4:$arg4 s:$service h:$height"
+            prepare
+            prestop	# service stop
+            prebackup
+            snapshot
+            backup_blockchain	# main task
+            postbackup # service restart
+            #unmount_dest
+        ;;
+        restore|--restore)
+            [ ! "$force" ] && echo "[ ! ] Task ignored. Force not given. Exit." && exit 1
+            echo "------------------------------------------------------------"
+            echo "RESTORE: Attention, the direction Source <-> Destination is now changed."
+            restore=true
+            log "$(date +%y%m%d%H%M%S) direction is restore"
+            prepare
+            prestop
+            backup_blockchain
+            postbackup # service restart
+            #unmount_dest
+        ;;
+        force|--force)
+            force=true
+            echo "[ i ] Force is set."
+            log "$(date +%y%m%d%H%M%S) force is set"
+        ;;
+        verbose|--verbose)
+            verbose=true
+            LOGGER=/usr/bin/logger
+            echo "[ i ] Debug is enabled."
+            log "$(date +%y%m%d%H%M%S) verbose now enabled"
+        ;;
+            --debug|-x)
+            set -x
+        ;;
+        all|-a|full|--full)
+            force=false
+            verbose=false
+            restore=false
+		# todo schleife loop services
+	    prepare
+            backup_blockchain
+            postbackup # service restart
+            #unmount_dest
+        ;;
+        mount)
+            mount_dest
+        ;;
+        umount)
+            unmount_dest
+        ;;
+        help|--help)
+            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
+            exit 0
+            ;;
+        ver|version|--version)
+            echo $version
+            exit 0
+            ;;
+        *)
+            # undefined case, exit with error
+            echo "Error: Invalid argument "$1""
+            echo "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|config|all|restore|verbose|force|mount|umount"
+            exit 1
+esac
+# --- main logic end
+exit
+
+# ------------------------------------------------------------------------
+# todos
+
+
+# ------------------------------------------------------------------------
+# errors
