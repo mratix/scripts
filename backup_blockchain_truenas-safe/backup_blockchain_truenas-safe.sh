@@ -63,8 +63,8 @@ folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
 USBDEV="/dev/sdf1"
 RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
 full_mode=false
-target_SERVICE=""
-target_host=""
+TARGET_SERVICE=""
+TARGET_HOST=""
 
 # --- logger
 show() { echo "$*"; }
@@ -175,7 +175,7 @@ log "script started"
 # Enhanced prepare function for single SERVICE or full mode
 prepare_single_SERVICE() {
     local blockchain_type="${1:-$TARGET_SERVICE}"
-    # local hostname_override="${target_host:-$(hostname -s)}"  # TODO: for gold/enterprise
+    # local hostname_override="${TARGET_HOST:-$(hostname -s)}"  # TODO: for gold/enterprise
 
     # Map blockchain type to SERVICE if needed
     case "$blockchain_type" in
@@ -728,8 +728,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         # Commands (no arguments)
         btc|xmr|xch)
-            [[ -n "$target_SERVICE" ]] && { error "Multiple blockchain types specified"; }
-            target_SERVICE="$1"
+            [[ -n "$TARGET_SERVICE" ]] && { error "Multiple blockchain types specified"; }
+            TARGET_SERVICE="$1"
             case "$1" in
                 btc) SERVICE="bitcoind" ;;
                 xmr) SERVICE="monerod" ;;
@@ -738,8 +738,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         bitcoind|monerod|chia|electrs|memPOOL)
-            [[ -n "$target_SERVICE" ]] && { error "Multiple SERVICEs specified"; }
-            target_SERVICE="$1"
+            [[ -n "$TARGET_SERVICE" ]] && { error "Multiple SERVICEs specified"; }
+            TARGET_SERVICE="$1"
             SERVICE="$1"
             shift
             ;;
@@ -768,12 +768,12 @@ while [[ $# -gt 0 ]]; do
         --SERVICE)
             [[ -z "${2:-}" ]] && { error "--SERVICE requires a value"; }
             SERVICE="$2"
-            target_SERVICE="$2"
+            TARGET_SERVICE="$2"
             shift 2
             ;;
         --host)
             [[ -z "${2:-}" ]] && { error "--host requires a value"; }
-            target_host="$2"
+            TARGET_HOST="$2"
             shift 2
             ;;
         # Boolean flags
@@ -806,8 +806,8 @@ while [[ $# -gt 0 ]]; do
         # Legacy/positional argument support
         *)
             # Handle positional arguments for backward compatibility
-            if [[ -z "$target_SERVICE" ]] && [[ "$1" =~ ^(btc|xmr|xch|bitcoind|monerod|chia)$ ]]; then
-                target_SERVICE="$1"
+            if [[ -z "$TARGET_SERVICE" ]] && [[ "$1" =~ ^(btc|xmr|xch|bitcoind|monerod|chia)$ ]]; then
+                TARGET_SERVICE="$1"
                 case "$1" in
                     btc) SERVICE="bitcoind" ;;
                     xmr) SERVICE="monerod" ;;
@@ -867,7 +867,7 @@ backup_all_SERVICEs() {
 
     # Get all available SERVICE configurations
     local all_SERVICEs=()
-    local hostname_target="${target_host:-$(hostname -s)}"
+    local hostname_target="${TARGET_HOST:-$(hostname -s)}"
 
     for config_key in "${!SERVICE_CONFIGS[@]}"; do
         # Extract hostname from config key (hostname_SERVICE)
