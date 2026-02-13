@@ -116,6 +116,8 @@ validate_HEIGHT() {
 
 # --- mount destination
 mount_dest(){
+vlog "mount_dest__"
+
 [ ! -d "$NASMOUNT" ] && mkdir -p $NASMOUNT
 if [[ "$USE_USB" == true ]]; then
     mount_usb
@@ -251,7 +253,8 @@ prepare_single_SERVICE
     show "------------------------------------------------------------"
     log "direction $SRCDIR > $DESTDIR"
 
-    read -r -p "Please check paths. (Autostart in 5 seconds will go to mount destination)" -t 5 -n 1 -s
+    show "Please check paths (continuing in 5 seconds)..."
+    sleep 5
 mount_dest
 }
 
