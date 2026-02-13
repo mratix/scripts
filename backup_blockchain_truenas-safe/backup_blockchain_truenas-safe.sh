@@ -69,7 +69,7 @@ TARGET_HOST=""
 # --- logger
 show() { echo "$*"; }
 log() { echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
-vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
+vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2; }
 warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: $*"; }
 error() { echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $*" >&2; exit 1; }
 
