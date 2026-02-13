@@ -8,25 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2026-02-13] - Refactoring Release
 
 ### Refactored
-- **Logging System**
-  - Unified logging functions: `show()`, `log()`, `vlog()`, `warn()`, `error()`
-  - Removed duplicate output patterns (log + echo)
-  - Removed decorations `[?]`, `[OK]`, `[!]` from user output
-  - Timestamps moved into log functions (no longer repeated manually)
-  - `log_info()` → `log()`
-  - `log_warn()` → `warn()`
-  - `log_error()` → `error()`
-  - `log_debug()` / `log_verbose()` → `vlog()`
-
-- **Error Handling**
-  - `error()` now contains exit 1 - all error calls terminate script
-  - `warn()` for non-critical warnings (script continues)
-  - Consistent error flow: warn + exit → error
+- **Variable Naming**: All global variables now UPPERCASE (e.g., `NASMOUNT`, `SERVICE`, `POOL`, `DATASET`, `SRCDIR`, `DESTDIR`, `HEIGHT`, `RESTORE`, `FORCE`, `VERBOSE`, `USE_USB`, `IS_ZFS`, `IS_MOUNTED`, `USBDEV`, `RSYNC_OPTS`)
+- **Local variables**: remain lowercase for distinction
+- **ZFS Configuration**: Uses `ZFS_POOL` and `ZFS_DATASET` from config (required)
+- **Service Mapping**: Removed `SERVICE_CONFIGS` (moved to gold/enterprise version)
+- **Logging**: Unified logging functions: `show()`, `log()`, `vlog()`, `warn()`, `error()`
+- **Argument Parsing**: Fixed syntax errors, simplified execution flow
+- **Config**: Added `ZFS_POOL` and `ZFS_DATASET` to safe.conf.example
 
 ### Fixed
-- Syntax errors in argument parsing (case statements)
-- Missing `fi` in service stop verification
-- Redundant exit statements
+- Config key parsing: `service:is_zfs:pool` now correctly reads 3 values
+- Missing `ZFS_POOL` now shows clear error message
 
 ## [2026-02-12] - Production Release
 

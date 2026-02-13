@@ -1,14 +1,14 @@
 #!/bin/bash
 # ============================================================
-# backup_blockchain_config.sh
-# Configuration file for blockchain backup scripts
+# Configuration file for blockchain backup script
+# backup_blockchain_truenas-safe.sh
 # ============================================================
 
 # --- Network Configuration ---
 NAS_USER="your_username"
-NAS_HOST="192.168.1.100"
-NAS_HOSTNAME="cronas"
-NAS_SHARE="blockchain"
+NAS_HOST="your_nas_ip_address"
+NAS_HOSTNAME="your_nashostname"
+NAS_SHARE="your_nassharename"
 
 # --- USB Configuration ---
 USB_DEVICE="/dev/sdf1"
@@ -18,12 +18,9 @@ USB_MOUNT_POINT="/mnt/usb"
 MOUNT_BASE="/mnt"
 DEFAULT_MOUNTPATH="/mnt/\${NAS_HOSTNAME}/\${NAS_SHARE}"
 
-# --- Service Configurations ---
-declare -A SERVICE_CONFIGS
-SERVICE_CONFIGS[deop9020m_btc]="bitcoind: false: tank-deop9020m"
-SERVICE_CONFIGS[hpms1_btc]="bitcoind: true: ssd"
-SERVICE_CONFIGS[hpms1_xmr]="monerod: true: ssd"
-SERVICE_CONFIGS[hpms1_xch]="chia: true: ssd"
+# --- ZFS Pool/Dataset (required) ---
+ZFS_POOL="ssd"
+ZFS_DATASET="blockchain"
 
 # --- Security Settings ---
 ALLOWED_MOUNT_PATHS="/mnt /home /var"
