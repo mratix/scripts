@@ -479,8 +479,10 @@ fi
 
     # Check if HEIGHT needs to be set (either too low or zero)
     if [[ "$HEIGHT" -lt "$min_HEIGHT" ]]; then
+        vlog "Current HEIGHT: $HEIGHT, min: $min_HEIGHT - will try detection"
         # Try to auto-detect HEIGHT from logs
         local detected_HEIGHT=$(get_block_HEIGHT)
+        vlog "Detected value: '$detected_HEIGHT'"
         if [[ "$detected_HEIGHT" -gt 0 ]]; then
             show "Detected blockchain HEIGHT: $detected_HEIGHT"
             HEIGHT="$detected_HEIGHT"
