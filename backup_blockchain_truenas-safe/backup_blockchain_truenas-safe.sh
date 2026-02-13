@@ -2,12 +2,12 @@
 set -euo pipefail
 # ============================================================
 # backup_blockchain_truenas-safe.sh
-# Backup & RESTORE script for blockchain on TrueNAS Scale (safe version)
+# Backup & restore script for blockchain on TrueNAS Scale (safe version)
 #
 # NOTE: All scripts (gold/enterprise/safe/pacman) and *.conf files
 #       live together in $HOME/scripts - keep them compatible!
 #
-# Supported SERVICEs:
+# Supported services:
 #   - bitcoind
 #   - monerod
 #   - chia
@@ -34,18 +34,17 @@ if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
 fi
 
-# Set lowercase variants for internal use
-nasuser="${NAS_USER:-}"
-nashost="${NAS_HOST:-}"
-nashostname="${NAS_HOSTNAME:-}"
-nasshare="${NAS_SHARE:-}"
-zfs_POOL="${ZFS_POOL:-}"
-zfs_DATASET="${ZFS_DATASET:-blockchain}"
+NAS_USER="${NAS_USER:-}"
+NAS_HOST="${NAS_HOST:-}"
+NAS_HOSTNAME="${NAS_HOSTNAME:-}"
+NAS_SHARE="${NAS_SHARE:-}"
+ZFS_POOL="${ZFS_POOL:-}"
+ZFS_DATASET="${ZFS_DATASET:-blockchain}"
 
 # --- runtime defaults
 today=$(date +%y%m%d)
 now=$(date +%y%m%d%H%M%S)
-NASMOUNT=/mnt/$nashostname/$nasshare
+NAS_MOUNT=/mnt/$NAS_HOSTNAME/$NAS_SHARE
 SERVICE=""
 RESTORE=false
 IS_MOUNTED=false
@@ -79,25 +78,25 @@ validate_HEIGHT() {
     local input_height="$1"
     local service_name="$2"
 
-    case "$SERVICE_name" in
+    case "$service_name" in
         bitcoind)
             # Bitcoin HEIGHT should be 6-8 digits (current ~800k)
-            if ! [[ "$input_HEIGHT" =~ ^[0-9]{6,8}$ ]]; then
-                warn "Invalid Bitcoin HEIGHT: $input_HEIGHT (should be 6-8 digits)"
+            if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
+                warn "Invalid Bitcoin HEIGHT: $input_height (should be 6-8 digits)"
                 return 1
             fi
             ;;
         monerod)
             # Monero HEIGHT should be 6-7 digits (current ~3M)
-            if ! [[ "$input_HEIGHT" =~ ^[0-9]{6,7}$ ]]; then
-                warn "Invalid Monero HEIGHT: $input_HEIGHT (should be 6-7 digits)"
+            if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
+                warn "Invalid Monero HEIGHT: $input_height (should be 6-7 digits)"
                 return 1
             fi
             ;;
         chia)
             # Chia HEIGHT can vary, use reasonable range
-            if ! [[ "$input_HEIGHT" =~ ^[0-9]{1,8}$ ]]; then
-                warn "Invalid Chia HEIGHT: $input_HEIGHT (should be 1-8 digits)"
+            if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
+                warn "Invalid Chia HEIGHT: $input_height (should be 1-8 digits)"
                 return 1
             fi
             ;;
@@ -109,7 +108,7 @@ validate_HEIGHT() {
         ;;
     esac
 
-    vlog "Validated HEIGHT: $input_HEIGHT for SERVICE: $SERVICE_name"
+    vlog "Validated HEIGHT: $input_height for SERVICE: $service_name"
     return 0
 }
 
@@ -118,30 +117,30 @@ validate_HEIGHT() {
 mount_dest(){
 vlog "mount_dest__"
 
-[ ! -d "$NASMOUNT" ] && mkdir -p $NASMOUNT
+[ ! -d "$NAS_MOUNT" ] && mkdir -p $NAS_MOUNT
 if [[ "$USE_USB" == true ]]; then
     mount_usb
 else
     # mount nas share
-    if mount | grep -q "$NASMOUNT"; then
+    if mount | grep -q "$NAS_MOUNT"; then
         log "NAS share already mounted"
-    elif mount -t cifs -o user="$nasuser" "//$nashost/$nasshare" "$NASMOUNT"; then
+    elif mount -t cifs -o user="$NAS_USER" "//$NAS_HOST/$NAS_SHARE" "$NAS_MOUNT"; then
         log "NAS share mounted successfully"
     else
-        error "Failed to mount NAS share //${nashost}/${nasshare} to ${NASMOUNT}"
+        error "Failed to mount NAS share //${NAS_HOST}/${NAS_SHARE} to ${NAS_MOUNT}"
     fi
     sleep 2
-    if [ -f "$NASMOUNT/$nashostname.dummy" ] && [ -f "$NASMOUNT/dir.dummy" ]; then
-        show "Network share $NASMOUNT is mounted and valid backup storage."
+    if [ -f "$NAS_MOUNT/$NAS_HOSTNAME.dummy" ] && [ -f "$NAS_MOUNT/dir.dummy" ]; then
+        show "Network share $NAS_MOUNT is mounted and valid backup storage."
     else
         error "Mount validation failed - check dummy files"
     fi
-    if [ ! -w "$NASMOUNT/" ]; then
-        warn "Error: Destination $NASMOUNT on //$nashost/$nasshare is NOT writable."
-        error "$NASMOUNT write permissions deny"
+    if [ ! -w "$NAS_MOUNT/" ]; then
+        warn "Error: Destination $NAS_MOUNT on //$NAS_HOST/$NAS_SHARE is NOT writable."
+        error "$NAS_MOUNT write permissions deny"
     fi
     IS_MOUNTED=true
-    log "share $NASMOUNT mounted, validated"
+    log "share $NAS_MOUNT mounted, validated"
 fi
 }
 
@@ -157,25 +156,25 @@ mount_usb(){
         error "Failed to mount USB device $USBDEV"
     fi
     sleep 2
-    if [ ! -f "$NASMOUNT/usb.dummy" ]; then
+    if [ ! -f "$NAS_MOUNT/usb.dummy" ]; then
         error "Mounted disk is not valid and or not prepared as backup storage!"
     fi
-    if [ ! -w "$NASMOUNT/" ]; then
-        warn "Error: Disk $NASMOUNT is NOT writable!"
-        error "usb $NASMOUNT write permissions deny"
+    if [ ! -w "$NAS_MOUNT/" ]; then
+        warn "Error: Disk $NAS_MOUNT is NOT writable!"
+        error "usb $NAS_MOUNT write permissions deny"
     fi
     IS_MOUNTED=true
     show "USB disk is (now) mounted and valid backup storage."
-    log "usb $NASMOUNT mounted, valid"
+    log "usb $NAS_MOUNT mounted, valid"
 }
 
 
 # --- unmount destination
 unmount_dest(){
         sync
-        df -h | grep $nasshare
-        mount | grep $NASMOUNT >/dev/null
-        [ $? -eq 0 ] && umount $NASMOUNT || IS_MOUNTED=false
+        df -h | grep $NAS_SHARE
+        mount | grep $NAS_MOUNT >/dev/null
+        [ $? -eq 0 ] && umount $NAS_MOUNT || IS_MOUNTED=false
 }
 
 
@@ -204,12 +203,12 @@ prepare_single_SERVICE() {
     esac
 
     # ZFS POOL/DATASET from config (required for safe version)
-    if [[ -z "$zfs_POOL" ]]; then
+    if [[ -z "$ZFS_POOL" ]]; then
         error "ZFS_POOL not configured in safe.conf"
     fi
 
-    POOL="$zfs_POOL"
-    DATASET="$POOL/$zfs_DATASET"
+    POOL="$ZFS_POOL"
+    DATASET="$POOL/$ZFS_DATASET"
     IS_ZFS=true
 
     log "SERVICE:$SERVICE POOL:$POOL DATASET:$DATASET"
@@ -227,12 +226,12 @@ fi
 prepare_single_SERVICE
 
 # construct paths
-    NASMOUNT=/mnt/$nashostname/$nasshare # redefine share, recheck is new $nasshare mounted
+    NAS_MOUNT=/mnt/$NAS_HOSTNAME/$NAS_SHARE # redefine share, recheck is new $NAS_SHARE mounted
     SRCDIR=/mnt/$DATASET/$SERVICE
-    DESTDIR=$NASMOUNT/$SERVICE
+    DESTDIR=$NAS_MOUNT/$SERVICE
     [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$DATASET/$SERVICE
 # case to usb disk (case RESTORE from network to usb not needed)
-    [[ "$USE_USB" == true ]] && DESTDIR=/mnt/usb/$nasshare/$SERVICE
+    [[ "$USE_USB" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
 
     # Use rsync options from config
     if [[ "$RESTORE" == true ]]; then
@@ -271,63 +270,9 @@ mount_dest
 
 # --- pre-tasks, stop SERVICE
 prestop(){
-log "try stop $SERVICE"
+vlog "prestop__"
 
-show "Attempting to stop $SERVICE via TrueNAS API..."
-
-# Try to stop SERVICE using TrueNAS API
-if command -v midclt >/dev/null 2>&1; then
-    case "$SERVICE" in
-        bitcoind)
-            # Try different naming conventions
-            release_names=("${SERVICE}-knots" "bitcoin-knots" "bitcoind" "bitcoin")
-            for release_name in "${release_names[@]}"; do
-                if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                    show "Found release: $release_name, stopping..."
-                    if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
-                        show "Service $release_name scaling down via API."
-                        log "$release_name stopped via API"
-                        break
-                    fi
-                fi
-            done
-            ;;
-        monerod)
-            release_names=("${SERVICE}" "monero" "monerod-knots")
-            for release_name in "${release_names[@]}"; do
-                if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                    show "Found release: $release_name, stopping..."
-                    if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
-                        show "Service $release_name scaling down via API."
-                        log "$release_name stopped via API"
-                        break
-                    fi
-                fi
-            done
-            ;;
-        chia)
-            release_names=("${SERVICE}" "chia-blockchain" "chia-mainnet")
-            for release_name in "${release_names[@]}"; do
-                if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                    show "Found release: $release_name, stopping..."
-                    if midclt call chart.release.scale "$release_name" '{"replica_count":0}' 2>/dev/null; then
-                        show "Service $release_name scaling down via API."
-                        log "$release_name stopped via API"
-                        break
-                    fi
-                fi
-            done
-            ;;
-    esac
-else
-    show "midclt command not found, falling back to manual intervention"
-fi
-
-show "Checking active SERVICE..."
-
-    show "The $SERVICE SERVICE shutdown and flushing cache takes long time."
-    show "Waiting for graceful shutdown..."
-
+    show "Checking active service..."
     # Wait for SERVICE to stop with timeout
     local timeout=300  # 5 minutes max wait
     local elapsed=0
@@ -339,19 +284,18 @@ show "Checking active SERVICE..."
             sleep $check_interval
             ((elapsed += check_interval))
         else
-            show "Great, SERVICE is now down."
+            show "Great, service is now down."
             break
         fi
     done
 
-# --- SERVICE check, final verification
+# --- service check, final verification
 if [ -f "${SRCDIR}/$SERVICE.pid" ]; then
     show "Warning: Service may still be running after $timeout seconds."
     show "Please verify manually that ${SERVICE} is stopped before proceeding."
     read -r -p "Continue anyway? (y/N): " -t 30 confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        show "Aborting due to potentially running SERVICE."
-        log "! abort: SERVICE still running"
+        warn "Aborting due to potentially running SERVICE."
         exit 1
     fi
 else
@@ -828,7 +772,7 @@ if [[ -n "$SERVICE" ]]; then
     if [[ "$HEIGHT" -gt 0 ]]; then
         validate_HEIGHT "$HEIGHT" "$SERVICE" || exit 1
     fi
-    [[ "$USE_USB" == true ]] && NASMOUNT=/mnt/usb/$nasshare
+    [[ "$USE_USB" == true ]] && NAS_MOUNT=/mnt/usb/$NAS_SHARE
     [[ "$VERBOSE" == true ]] && show "SERVICE: $SERVICE, HEIGHT: $HEIGHT"
     prepare
     prestop
@@ -896,11 +840,11 @@ show "=== BACKUP ALL CONFIGURED SERVICES ==="
         HEIGHT=0
 
         # Set paths for this SERVICE
-        NASMOUNT=/mnt/$nashostname/$nasshare
+        NAS_MOUNT=/mnt/$NAS_HOSTNAME/$NAS_SHARE
         SRCDIR=/mnt/$DATASET/$SERVICE
-        DESTDIR=$NASMOUNT/$SERVICE
+        DESTDIR=$NAS_MOUNT/$SERVICE
         [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$DATASET/$SERVICE
-        [[ "$USE_USB" == true ]] && DESTDIR=/mnt/usb/$nasshare/$SERVICE
+        [[ "$USE_USB" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
 
         # Set rsync options
         if [[ "$RESTORE" == true ]]; then
