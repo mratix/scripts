@@ -389,7 +389,7 @@ compare() {
 
 # --- get blockchain HEIGHT from logs
 get_block_HEIGHT() {
-    local parsed_height=0
+    local PARSED_HEIGHT=0
 
     case "$SERVICE" in
         bitcoind)
@@ -397,8 +397,8 @@ get_block_HEIGHT() {
                 # Parse HEIGHT from UpdateTip line: HEIGHT=936124
                 local update_tip_line=$(tail -n20 "${SRCDIR}/debug.log" | grep UpdateTip | tail -1)
                 if [[ "$update_tip_line" =~ HEIGHT=([0-9]+) ]]; then
-                    parsed_HEIGHT="${BASH_REMATCH[1]}"
-                    log_debug "Parsed Bitcoin HEIGHT: $parsed_HEIGHT from debug.log"
+                    PARSED_HEIGHT="${BASH_REMATCH[1]}"
+                    vlog "Parsed Bitcoin HEIGHT: $PARSED_HEIGHT from debug.log"
                 fi
             fi
             ;;
@@ -407,8 +407,8 @@ get_block_HEIGHT() {
                 # Parse HEIGHT from Synced line: Synced 3495136/3608034
                 local synced_line=$(tail -n20 "${SRCDIR}/bitmonero.log" | grep "Synced" | tail -1)
                 if [[ "$synced_line" =~ Synced\ ([0-9]+)/[0-9]+ ]]; then
-                    parsed_HEIGHT="${BASH_REMATCH[1]}"
-                    log_debug "Parsed Monero HEIGHT: $parsed_HEIGHT from bitmonero.log"
+                    PARSED_HEIGHT="${BASH_REMATCH[1]}"
+                    vlog "Parsed Monero HEIGHT: $PARSED_HEIGHT from bitmonero.log"
                 fi
             fi
             ;;
@@ -425,12 +425,12 @@ get_block_HEIGHT() {
                     # Try to parse HEIGHT from various chia log patterns
                     local height_line=$(tail -n50 "$log_file" | grep -E "(height|Height|block|Block)" | tail -1)
                     if [[ "$HEIGHT_line" =~ (HEIGHT|Height)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
-                        parsed_HEIGHT="${BASH_REMATCH[2]}"
-                        log_debug "Parsed Chia HEIGHT: $parsed_HEIGHT from $log_file"
+                        PARSED_HEIGHT="${BASH_REMATCH[2]}"
+                        vlog "Parsed Chia HEIGHT: $PARSED_HEIGHT from $log_file"
                         break
                     elif [[ "$HEIGHT_line" =~ (block|Block)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
-                        parsed_HEIGHT="${BASH_REMATCH[2]}"
-                        log_debug "Parsed Chia block HEIGHT: $parsed_HEIGHT from $log_file"
+                        PARSED_HEIGHT="${BASH_REMATCH[2]}"
+                        vlog "Parsed Chia block HEIGHT: $PARSED_HEIGHT from $log_file"
                         break
                     fi
                 fi
@@ -441,16 +441,16 @@ get_block_HEIGHT() {
             if [ -f "${SRCDIR}/../bitcoind/debug.log" ]; then
                 local update_tip_line=$(tail -n20 "${SRCDIR}/../bitcoind/debug.log" | grep UpdateTip | tail -1)
                 if [[ "$update_tip_line" =~ HEIGHT=([0-9]+) ]]; then
-                    parsed_HEIGHT="${BASH_REMATCH[1]}"
-                    log_debug "Parsed electrs HEIGHT: $parsed_HEIGHT from bitcoind debug.log"
+                    PARSED_HEIGHT="${BASH_REMATCH[1]}"
+                    vlog "Parsed electrs HEIGHT: $PARSED_HEIGHT from bitcoind debug.log"
                 fi
             fi
             ;;
     esac
 
     # Validate parsed HEIGHT is numeric and greater than 0
-    if [[ "$parsed_HEIGHT" =~ ^[0-9]+$ ]] && [ "$parsed_HEIGHT" -gt 0 ]; then
-        echo "$parsed_HEIGHT"
+    if [[ "$PARSED_HEIGHT" =~ ^[0-9]+$ ]] && [ "$PARSED_HEIGHT" -gt 0 ]; then
+        echo "$PARSED_HEIGHT"
     else
         echo "0"
     fi
@@ -509,8 +509,8 @@ fi
         fi
 
         # Enhanced HEIGHT file listing with better pattern matching
-        show "Remote backuped HEIGHTs found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || show "None")"
-        show "Local working HEIGHT is           : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed -e 's/\..*$//' || show "None")"
+        show "Remote backuped HEIGHTs found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Local working HEIGHT is           : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
         show "Current configured HEIGHT          : $HEIGHT"
         show "Minimum reasonable HEIGHT for $SERVICE: $min_HEIGHT"
         show "------------------------------------------------------------"
@@ -536,27 +536,27 @@ show "Rotate log file started at $(date +%H:%M:%S)"
     fi
 
     # Move existing HEIGHT stamp files more safely
-    log_debug "Moving HEIGHT stamp files to h$HEIGHT"
+    vlog "Moving HEIGHT stamp files to h$HEIGHT"
     find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" -type f -exec mv -u {} ${SRCDIR}/h$HEIGHT \; 2>/dev/null || true
 
     # Rotate SERVICE-specific log files with validation
     if [ -f ${SRCDIR}/debug.log ]; then
-        log_debug "Rotating Bitcoin debug log with HEIGHT $HEIGHT"
+        vlog "Rotating Bitcoin debug log with HEIGHT $HEIGHT"
         mv -u ${SRCDIR}/debug.log ${SRCDIR}/debug_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/bitmonero.log ]; then
-        log_debug "Rotating Monero log with HEIGHT $HEIGHT"
+        vlog "Rotating Monero log with HEIGHT $HEIGHT"
         mv -u ${SRCDIR}/bitmonero.log ${SRCDIR}/bitmonero_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/.chia/mainnet/log/debug.log ]; then
-        log_debug "Rotating Chia debug log with HEIGHT $HEIGHT"
+        vlog "Rotating Chia debug log with HEIGHT $HEIGHT"
         mv -u ${SRCDIR}/.chia/mainnet/log/debug.log ${SRCDIR}/.chia/mainnet/log/debug_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/db/bitcoin/LOG ]; then
-        log_debug "Rotating Electrum log with HEIGHT $HEIGHT"
+        vlog "Rotating Electrum log with HEIGHT $HEIGHT"
         mv -u ${SRCDIR}/db/bitcoin/LOG ${SRCDIR}/electrs_h$HEIGHT.log
     fi
 
