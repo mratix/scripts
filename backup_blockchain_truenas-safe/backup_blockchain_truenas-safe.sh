@@ -618,7 +618,7 @@ elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
 fi
 
     # machine deop9020m/hpms1
-    [ "$SERVICE" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat" ${DESTDIR}/
+    [ "$SERVICE" == "bitcoind" ] && cp -u anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat ${DESTDIR}/ 2>/dev/null || true
     [ "$SERVICE" == "bitcoind" ] && cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
     [ "$SERVICE" == "bitcoind" ] && cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
     [ "$SERVICE" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
@@ -995,7 +995,7 @@ fi
 
     # Service-specific file copying and folder setup
     if [ "$SERVICE" == "bitcoind" ]; then
-        cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat" ${DESTDIR}/
+        cp -u anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat ${DESTDIR}/ 2>/dev/null || true
         cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
         cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
         folder[1]="blocks"; folder[2]="chainstate"
