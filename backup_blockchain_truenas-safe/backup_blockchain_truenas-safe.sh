@@ -503,18 +503,17 @@ fi
 
             # electrs
             [ -f ${SRCDIR}/db/bitcoin/LOG ] && tail -n20 ${SRCDIR}/db/bitcoin/LOG
+
+            # Ask for manual HEIGHT input only if not detected
+            read -p "Set new Blockchain HEIGHT   : h" HEIGHT
         fi
 
-        # Enhanced HEIGHT file listing with better pattern matching
+        # Show HEIGHT summary (always)
         show "Remote backuped HEIGHTs found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
         show "Last backuped HEIGHT             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
         show "Current detected HEIGHT         : $detected_HEIGHT"
         show "Current configured HEIGHT          : $HEIGHT"
-        show "Last backuped HEIGHT             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
-        show "Current configured HEIGHT          : $HEIGHT"
         show "Minimum reasonable HEIGHT        : $min_HEIGHT"
-        show "------------------------------------------------------------"
-        read -p "Set new Blockchain HEIGHT   : h" HEIGHT
     fi
 
     # Validate HEIGHT before proceeding
