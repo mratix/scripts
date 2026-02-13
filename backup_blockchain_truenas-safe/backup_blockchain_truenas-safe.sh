@@ -19,7 +19,7 @@ version="260213-safe"
 # ============================================================
 
 echo "-------------------------------------------------------------------------------"
-echo "Backup blockchain and or SERVICEs to NAS/USB (safe version)"
+echo "Backup blockchain and or services to NAS/USB (safe version)"
 
 # --- config defaults (override via safe.conf)
 NAS_USER=""
@@ -69,7 +69,7 @@ TARGET_HOST=""
 # --- logger
 show() { echo "$*"; }
 log() { echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
-vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2; }
+vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2 || true; }
 warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: $*"; }
 error() { echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $*" >&2; exit 1; }
 
@@ -239,8 +239,18 @@ prepare_single_SERVICE
         RSYNC_OPTS="${RSYNC_CONFIGS[RESTORE]}"
     elif [[ -n "${RSYNC_CONFIGS[$SERVICE]:-}" ]]; then
         RSYNC_OPTS="${RSYNC_CONFIGS[$SERVICE]}"
+        if [[ "$VERBOSE" != true ]]; then
+            RSYNC_OPTS="${RSYNC_OPTS//--stats/}"
+            RSYNC_OPTS="${RSYNC_OPTS//--info=progress2/}"
+            RSYNC_OPTS="${RSYNC_OPTS//--info=progress/}"
+            RSYNC_OPTS="${RSYNC_OPTS//-P/}"
+        fi
     else
-        RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"  # fallback
+        if [[ "$VERBOSE" == true ]]; then
+            RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
+        else
+            RSYNC_OPTS="-avz --update --delete"
+        fi
     fi
 
 # output results
@@ -584,7 +594,7 @@ if [ "$IS_ZFS" ]; then
     sync
     sleep 1
     snapname="script-$(date +%Y-%m-%d_%H-%M)"
-    zfs snapshot -r ${DATASET}@${snapname}
+    zfs snapshot -r ${DATASET}@${snapname} 2>/dev/null || true
     show "Snapshot '$snapname' was taken."
     log "snapshot $snapname taken"
 fi
@@ -648,64 +658,13 @@ log "end task backup main"
 }
 
 
-# --- postbackup tasks, restart SERVICE
+# --- postbackup tasks
 postbackup(){
 if [[ "$RESTORE" == false ]]; then
     chown -R apps:apps ${SRCDIR}
-    show ""
-
-    # Try to restart SERVICE using TrueNAS API
-    if command -v midclt >/dev/null 2>&1; then
-        show "Attempting to restart $SERVICE via TrueNAS API..."
-        case "$SERVICE" in
-            bitcoind)
-                release_names=("${SERVICE}-knots" "bitcoin-knots" "bitcoind" "bitcoin")
-                for release_name in "${release_names[@]}"; do
-                    if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                        show "Found release: $release_name, restarting..."
-                        if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
-                            show "Service $release_name scaling up via API."
-                            log "$release_name restarted via API"
-                            break
-                        fi
-                    fi
-                done
-                ;;
-            monerod)
-                release_names=("${SERVICE}" "monero" "monerod-knots")
-                for release_name in "${release_names[@]}"; do
-                    if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                        show "Found release: $release_name, restarting..."
-                        if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
-                            show "Service $release_name scaling up via API."
-                            log "$release_name restarted via API"
-                            break
-                        fi
-                    fi
-                done
-                ;;
-            chia)
-                release_names=("${SERVICE}" "chia-blockchain" "chia-mainnet")
-                for release_name in "${release_names[@]}"; do
-                    if midclt call chart.release.query [["release_name", "=", "$release_name"]] 2>/dev/null | grep -q "$release_name"; then
-                        show "Found release: $release_name, restarting..."
-                        if midclt call chart.release.scale "$release_name" '{"replica_count":1}' 2>/dev/null; then
-                            show "Service $release_name scaling up via API."
-                            log "$release_name restarted via API"
-                            break
-                        fi
-                    fi
-                done
-                ;;
-        esac
-    else
-        show "midclt command not found, please restart $SERVICE manually"
-    fi
 else
     chown -R apps ${DESTDIR}
-        # no SERVICE start after RESTORE
     show "Restore task finished. Check the result in ${DESTDIR}."
-    show "Service $SERVICE will not automatically restarted."
 fi
 
 show "Script ended at $(date +%H:%M:%S)"
@@ -890,7 +849,7 @@ fi
 
 # --- full mode implementation
 backup_all_SERVICEs() {
-    show "=== BACKUP ALL CONFIGURED SERVICES ==="
+show "=== BACKUP ALL CONFIGURED SERVICES ==="
 
     # Get all available SERVICE configurations
     local all_SERVICEs=()
@@ -948,8 +907,18 @@ backup_all_SERVICEs() {
             RSYNC_OPTS="${RSYNC_CONFIGS[RESTORE]}"
         elif [[ -n "${RSYNC_CONFIGS[$SERVICE]:-}" ]]; then
             RSYNC_OPTS="${RSYNC_CONFIGS[$SERVICE]}"
+            if [[ "$VERBOSE" != true ]]; then
+                RSYNC_OPTS="${RSYNC_OPTS//--stats/}"
+                RSYNC_OPTS="${RSYNC_OPTS//--info=progress2/}"
+                RSYNC_OPTS="${RSYNC_OPTS//--info=progress/}"
+                RSYNC_OPTS="${RSYNC_OPTS//-P/}"
+            fi
         else
-            RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
+            if [[ "$VERBOSE" == true ]]; then
+                RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
+            else
+            RSYNC_OPTS="-avz --update --delete"
+            fi
         fi
 
         # Run backup workflow for this SERVICE
@@ -1025,21 +994,8 @@ show "------------------------------------------------------------"
 log "end task backup main"
 }
 
-# --- main execution logic
-if [[ "$full_mode" == true ]]; then
-    backup_all_SERVICEs
-else
-    # Single SERVICE mode
-    prepare
-    prestop
-    prebackup
-    snapshot
-    backup_blockchain_single
-    postbackup
-fi
-
 # --- main logic end
-exit
+exit 0
 
 # ------------------------------------------------------------------------
 # todos

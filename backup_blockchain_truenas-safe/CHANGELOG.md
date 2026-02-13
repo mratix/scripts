@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2026-02-13] - Refactoring Release
 
+### Fixed
+- **vlog() with set -e**: Added `|| true` to prevent script exit when VERBOSE=false
+- **Double execution**: Removed duplicate code block that caused script to run twice
+- **RSYNC_OPTS verbose handling**: When VERBOSE=false, removes `--stats`, `--info=progress2`, `-P` from rsync options for cleaner output
+- **Snapshot creation**: Added `|| true` to ignore "dataset already exists" errors
+- **postbackup**: Removed TrueNAS API restart logic for safe version (manual start/stop)
+
 ### Refactored
 - **Variable Naming**: All global variables now UPPERCASE (e.g., `NASMOUNT`, `SERVICE`, `POOL`, `DATASET`, `SRCDIR`, `DESTDIR`, `HEIGHT`, `RESTORE`, `FORCE`, `VERBOSE`, `USE_USB`, `IS_ZFS`, `IS_MOUNTED`, `USBDEV`, `RSYNC_OPTS`)
 - **Local variables**: remain lowercase for distinction
