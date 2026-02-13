@@ -121,33 +121,47 @@ if [[ "$USE_USB" == true ]]; then
     mount_usb
 else
     # mount nas share
-    mount | grep $NASMOUNT >/dev/null
-    [ $? -eq 0 ] || mount -t cifs -o user=$nasuser //$nashost/$nasshare $NASMOUNT
+    if mount | grep -q "$NASMOUNT"; then
+        log "NAS share already mounted"
+    elif mount -t cifs -o user="$nasuser" "//$nashost/$nasshare" "$NASMOUNT"; then
+        log "NAS share mounted successfully"
+    else
+        error "Failed to mount NAS share //${nashost}/${nasshare} to ${NASMOUNT}"
+    fi
     sleep 2
-    [ -f "$NASMOUNT/$nashostname.dummy" ] && [ -f "$NASMOUNT/dir.dummy" ] && show "Network share $NASMOUNT is mounted and valid backup storage."
-        if [ ! -w "$NASMOUNT/" ]; then
-            warn "Error: Destination $NASMOUNT on //$nashost/$nasshare is NOT writable."
-            error "$NASMOUNT write permissions deny"
-        else
-            IS_MOUNTED=true
-            log "share $NASMOUNT mounted, validated"
-        fi
+    if [ -f "$NASMOUNT/$nashostname.dummy" ] && [ -f "$NASMOUNT/dir.dummy" ]; then
+        show "Network share $NASMOUNT is mounted and valid backup storage."
+    else
+        error "Mount validation failed - check dummy files"
+    fi
+    if [ ! -w "$NASMOUNT/" ]; then
+        warn "Error: Destination $NASMOUNT on //$nashost/$nasshare is NOT writable."
+        error "$NASMOUNT write permissions deny"
+    fi
+    IS_MOUNTED=true
+    log "share $NASMOUNT mounted, validated"
 fi
 }
 
 
 # --- mount usb device
 mount_usb(){
-    # NASMOUNT=/mnt/usb/$nasshare # was set before
     [ ! -d "/mnt/usb" ] && mkdir -p /mnt/usb
-    mount | grep /mnt/usb >/dev/null
-    [ $? -eq 0 ] || mount $USBDEV /mnt/usb
+    if mount | grep -q /mnt/usb; then
+        log "USB already mounted"
+    elif mount "$USBDEV" /mnt/usb; then
+        log "USB mounted successfully"
+    else
+        error "Failed to mount USB device $USBDEV"
+    fi
     sleep 2
-    [ ! -f "$NASMOUNT/usb.dummy" ] && { show "Mounted disk is not valid and or not prepared as backup storage! Exit."; exit 1; }
-        if [ ! -w "$NASMOUNT/" ]; then
-            warn "Error: Disk $NASMOUNT is NOT writable! Exit."
-            error "usb $NASMOUNT write permissions deny"
-        fi
+    if [ ! -f "$NASMOUNT/usb.dummy" ]; then
+        error "Mounted disk is not valid and or not prepared as backup storage!"
+    fi
+    if [ ! -w "$NASMOUNT/" ]; then
+        warn "Error: Disk $NASMOUNT is NOT writable!"
+        error "usb $NASMOUNT write permissions deny"
+    fi
     IS_MOUNTED=true
     show "USB disk is (now) mounted and valid backup storage."
     log "usb $NASMOUNT mounted, valid"
