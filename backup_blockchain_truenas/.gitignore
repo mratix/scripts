@@ -1,7 +1,0 @@
-todos.txt
-*.bundle
-*.patch
-# host specific / secrets
-*.conf.local
-hpms1.conf
-*.secrets

@@ -1,8 +1,7 @@
-<<<<<<< HEAD
-v1.1.4 – Documentation & Governance Release
+v1.1.8 – Gold Release v1.1.8 Pro
+  renamed to backup_blockchain_truenas-pro.sh
 
 =======
-<<<<<<< ours
 v1.1.5
   Defaulted SERVICE_START_AFTER to be unset and have check_service_running persist SERVICE_WAS_RUNNING while deriving a start-after default when unspecified, so headless runs can restore prior state safely.
   Added a backup cleanup trap to restart services on error paths during backup execution, while keeping normal start behavior intact.
@@ -11,24 +10,14 @@ v1.1.5
   get_block_height: from service checked and adjusted; from logfile in preparation for reintegration
   STATEFILE temporary relocated, please adapt to your own environment
 
-v1.1.4 – Documentation & Governance Release
 =======
 v1.1.4 – Documentation & Governance Release
-
->>>>>>> theirs
->>>>>>> f631886 (	geändert:       LICENSE)
 - docs: refresh README.md and README.short to reflect current release state
 - docs: update RELEASE_NOTES.md and add v1.1.4 release notes
 - docs: add community standards files (license, security, contributing, templates)
 - maintenance: minor wording updates for clarity and consistency
-<<<<<<< ours
+
 =======
-
-v1.0.6 – Maintenance Release
->>>>>>> theirs
-
-v1.0.6 – Maintenance Release
-
 v1.0.6 – Maintenance Release
 - fix: init-config no longer requires SERVICE and exits early
 - fix: safe SERVICE_CT_MAP access with empty SERVICE
@@ -37,3 +26,4 @@ v1.0.6 – Maintenance Release
 - fix: restore mode requires interactive terminal
 - config: VERIFY, VERBOSE and STATEFILE are now honored from *.conf files
 - cleanup: minor logging and stability improvements
+

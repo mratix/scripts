@@ -4,7 +4,7 @@ set -euo pipefail
 # backup_blockchain_truenas-safe.sh
 # Backup & restore script for blockchain on TrueNAS Scale (safe version)
 #
-# NOTE: All scripts (gold/enterprise/safe/pacman) and *.conf files
+# NOTE: All scripts (gold/pro/safe/pacman) and *.conf files
 #       live together in $HOME/scripts - keep them compatible!
 #
 # Supported services:
@@ -560,8 +560,10 @@ case "$SERVICE" in
         cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
         cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
         folder[1]="blocks"; folder[2]="chainstate":
-        if [[ -f "${SRCDIR}/indexes/coinstats/db/CURRENT" || \
+        # coinstats EOL, up to Core v1.0.30 #
+        #if [[ -f "${SRCDIR}/indexes/coinstats/db/CURRENT" || \
               -f "${SRCDIR}/indexes/coinstatsindex/db/CURRENT" ]]; then
+        if [[  "${SRCDIR}/indexes/coinstatsindex/db/CURRENT" ]]; then
             folder[3]="indexes"
         else
             folder[3]="indexes/blockfilter"

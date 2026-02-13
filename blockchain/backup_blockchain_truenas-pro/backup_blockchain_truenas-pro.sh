@@ -1,11 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 # ============================================================
+# backup_blockchain_truenas-pro.sh
 # Backup & restore script for blockchain nodes on TrueNAS Scale
-# Gold Release v1.1.8
+# Gold Release v1.1.8 Pro
 # Maintenance release: Logic errors elimination, stability, fine-tuning
 #
-# NOTE: All scripts (gold/enterprise/safe/pacman) and *.conf files
+# NOTE: All scripts (gold/pro/safe/pacman) and *.conf files
 #       live together in $HOME/scripts - keep them compatible!
 #
 # Supported blockchains and services:
@@ -43,6 +44,7 @@ RSYNC_EXCLUDES=(
   --exclude='/.zfs/**'
   --exclude='/.snapshot'
   --exclude='/.snapshot/**'
+  --exclude='/indexes/coinstats'
 )
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
@@ -333,7 +335,7 @@ vlog "__prebackup__"
             warn "Fix SSL file permissions"
             docker_exec "$SERVICE" chia init --fix-ssl-permissions
 
-            local run_live_backup=true prompt_timeout="${CHIA_LIVE_BACKUP_PROMPT_TIMEOUT:-8}" keypress=""
+            local run_live_backup=true prompt_timeout="${CHIA_LIVE_BACKUP_PROMPT_TIMEOUT:-15}" keypress=""
             if [ -t 0 ]; then
                 show "Optional: press any key within ${prompt_timeout}s to skip Chia live DB backup (slow step)."
                 if read -r -t "$prompt_timeout" -n 1 keypress 2>/dev/null; then
@@ -347,7 +349,7 @@ vlog "__prebackup__"
             fi
 
             if [[ "$run_live_backup" == true ]]; then
-                log "Starting live database backup... (takes long, 15mins+)"
+                log "Starting live database backup... (takes long, 30mins+)"
                 docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
                 sync
 

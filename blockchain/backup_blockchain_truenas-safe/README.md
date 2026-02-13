@@ -62,9 +62,8 @@ sudo nano backup_blockchain_truenas-safe.conf
 
 # Important settings to customize:
 # - NAS_USER: Your username for NAS access
-# - NAS_HOST: Your NAS IP address  
+# - NAS_HOST: Your NAS IP address
 # - USB_DEVICE: Your USB device path
-# - Service mappings for your hostnames and pools
 ```
 
 ## Supported Services
@@ -180,11 +179,11 @@ sudo k3s kubectl scale deployment <service-name> --replicas=0
 
 **Mount permission denied:**
 ```bash
-# Check share permissions
+# Check network-share permissions
 ls -la /mnt/cronas/blockchain/
 
 # Test mount manually (using your actual credentials)
-sudo mount -t cifs -o user=<USERNAME> //<NAS_IP>/blockchain /mnt/cronas/blockchain
+sudo mount -t cifs -o user=<your_user_here> //<NAS_IP>/blockchain /mnt/cronas/blockchain
 ```
 
 **USB device not recognized:**
@@ -217,7 +216,7 @@ midclt call core.get_logs | grep -i backup
 
 ## Security Considerations
 
-- **Security**: Store sensitive data in TrueNAS secrets manager
+- **Security**: Store sensitive data in TrueNAS credential manager
 - **Permissions**: Run with appropriate user privileges
 - **Network**: Use encrypted SMB/NFS shares where possible
 - **Access**: Limit script access to authorized users
@@ -259,7 +258,7 @@ RSYNC_CONFIGS[usb_backup]="-avh -P --stats --delete --no-compress"
 
 ## License
 
-MIT License - see LICENSE file for details
+Non-Commercial Use Only - see LICENSE file for details
 
 ## Support
 
