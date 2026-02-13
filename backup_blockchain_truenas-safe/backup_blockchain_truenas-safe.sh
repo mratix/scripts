@@ -44,16 +44,15 @@ ZFS_DATASET="${ZFS_DATASET:-blockchain}"
 # --- runtime defaults
 today=$(date +%y%m%d)
 now=$(date +%y%m%d%H%M%S)
-NAS_MOUNT=/mnt/$NAS_HOSTNAME/$NAS_SHARE
+NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE
 SERVICE=""
 RESTORE=false
-IS_MOUNTED=false
-USE_USB=false
+is_mounted=false
+use_usb=false
 FORCE=false
 VERBOSE=false
-debug=false
 HEIGHT=0
-IS_ZFS=false
+is_zfs=false
 POOL=""
 DATASET=""
 SRCDIR=""
@@ -73,42 +72,42 @@ warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: $*"; }
 error() { echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $*" >&2; exit 1; }
 
 
-# --- Validate HEIGHT input
-validate_HEIGHT() {
+# --- Validate height input
+validate_height() {
     local input_height="$1"
     local service_name="$2"
 
     case "$service_name" in
         bitcoind)
-            # Bitcoin HEIGHT should be 6-8 digits (current ~800k)
+            # Bitcoin height should be 6-8 digits (current ~800k)
             if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
-                warn "Invalid Bitcoin HEIGHT: $input_height (should be 6-8 digits)"
+                warn "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
                 return 1
             fi
             ;;
         monerod)
-            # Monero HEIGHT should be 6-7 digits (current ~3M)
+            # Monero height should be 6-7 digits (current ~3M)
             if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
-                warn "Invalid Monero HEIGHT: $input_height (should be 6-7 digits)"
+                warn "Invalid Monero height: $input_height (should be 6-7 digits)"
                 return 1
             fi
             ;;
         chia)
-            # Chia HEIGHT can vary, use reasonable range
+            # Chia height can vary, use reasonable range
             if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
-                warn "Invalid Chia HEIGHT: $input_height (should be 1-8 digits)"
+                warn "Invalid Chia height: $input_height (should be 1-8 digits)"
                 return 1
             fi
             ;;
         *)
             # undefined case, exit
             warn "Error: Invalid argument '$1'"
-            show "Usage: $0 btc|xmr|xch|electrs|<SERVICEname> <HEIGHT>|all|RESTORE|VERBOSE|FORCE|mount|umount"
+            show "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|all|restore|verbose|force|mount|umount"
             exit 1
         ;;
     esac
 
-    vlog "Validated HEIGHT: $input_height for SERVICE: $service_name"
+    vlog "Validated height: $input_height for SERVICE: $service_name"
     return 0
 }
 
@@ -117,30 +116,30 @@ validate_HEIGHT() {
 mount_dest(){
 vlog "mount_dest__"
 
-[ ! -d "$NAS_MOUNT" ] && mkdir -p $NAS_MOUNT
-if [[ "$USE_USB" == true ]]; then
+[ ! -d "$NAS_MOUNTP" ] && mkdir -p $NAS_MOUNTP
+if [[ "$use_usb" == true ]]; then
     mount_usb
 else
     # mount nas share
-    if mount | grep -q "$NAS_MOUNT"; then
+    if mount | grep -q "$NAS_MOUNTP"; then
         log "NAS share already mounted"
-    elif mount -t cifs -o user="$NAS_USER" "//$NAS_HOST/$NAS_SHARE" "$NAS_MOUNT"; then
+    elif mount -t cifs -o user="$NAS_USER" "//$NAS_HOST/$NAS_SHARE" "$NAS_MOUNTP"; then
         log "NAS share mounted successfully"
     else
-        error "Failed to mount NAS share //${NAS_HOST}/${NAS_SHARE} to ${NAS_MOUNT}"
+        error "Failed to mount NAS share //${NAS_HOST}/${NAS_SHARE} to ${NAS_MOUNTP}"
     fi
     sleep 2
-    if [ -f "$NAS_MOUNT/$NAS_HOSTNAME.dummy" ] && [ -f "$NAS_MOUNT/dir.dummy" ]; then
-        show "Network share $NAS_MOUNT is mounted and valid backup storage."
+    if [ -f "$NAS_MOUNTP/$NAS_HOSTNAME.dummy" ] && [ -f "$NAS_MOUNTP/dir.dummy" ]; then
+        show "Network share $NAS_MOUNTP is mounted and valid backup storage."
     else
         error "Mount validation failed - check dummy files"
     fi
-    if [ ! -w "$NAS_MOUNT/" ]; then
-        warn "Error: Destination $NAS_MOUNT on //$NAS_HOST/$NAS_SHARE is NOT writable."
-        error "$NAS_MOUNT write permissions deny"
+    if [ ! -w "$NAS_MOUNTP/" ]; then
+        warn "Error: Destination $NAS_MOUNTP on //$NAS_HOST/$NAS_SHARE is NOT writable."
+        error "$NAS_MOUNTP write permissions deny"
     fi
-    IS_MOUNTED=true
-    log "share $NAS_MOUNT mounted, validated"
+    is_mounted=true
+    log "share $NAS_MOUNTP mounted, validated"
 fi
 }
 
@@ -156,16 +155,16 @@ mount_usb(){
         error "Failed to mount USB device $USBDEV"
     fi
     sleep 2
-    if [ ! -f "$NAS_MOUNT/usb.dummy" ]; then
+    if [ ! -f "$NAS_MOUNTP/usb.dummy" ]; then
         error "Mounted disk is not valid and or not prepared as backup storage!"
     fi
-    if [ ! -w "$NAS_MOUNT/" ]; then
-        warn "Error: Disk $NAS_MOUNT is NOT writable!"
-        error "usb $NAS_MOUNT write permissions deny"
+    if [ ! -w "$NAS_MOUNTP/" ]; then
+        warn "Error: Disk $NAS_MOUNTP is NOT writable!"
+        error "usb $NAS_MOUNTP write permissions deny"
     fi
-    IS_MOUNTED=true
+    is_mounted=true
     show "USB disk is (now) mounted and valid backup storage."
-    log "usb $NAS_MOUNT mounted, valid"
+    log "usb $NAS_MOUNTP mounted, valid"
 }
 
 
@@ -173,22 +172,22 @@ mount_usb(){
 unmount_dest(){
         sync
         df -h | grep $NAS_SHARE
-        mount | grep $NAS_MOUNT >/dev/null
-        [ $? -eq 0 ] && umount $NAS_MOUNT || IS_MOUNTED=false
+        mount | grep $NAS_MOUNTP >/dev/null
+        [ $? -eq 0 ] && umount $NAS_MOUNTP || is_mounted=false
 }
 
 
 # --- evaluate environment
 prepare(){
 show "Script started at $(date +%H:%M:%S)"
-log "script started"
+log "script $version started"
 
 # TODO: move SERVICE_CONFIGS mapping to gold/enterprise version
 # TODO: implement host/SERVICE auto-detection from SERVICE_CONFIGS
 }
 
 # Enhanced prepare function for single SERVICE or full mode
-prepare_single_SERVICE() {
+prepare_single_service() {
     local blockchain_type="${1:-$TARGET_SERVICE}"
     # local hostname_override="${TARGET_HOST:-$(hostname -s)}"  # TODO: for gold/enterprise
 
@@ -209,9 +208,9 @@ prepare_single_SERVICE() {
 
     POOL="$ZFS_POOL"
     DATASET="$POOL/$ZFS_DATASET"
-    IS_ZFS=true
+    is_zfs=true
 
-    log "SERVICE:$SERVICE POOL:$POOL DATASET:$DATASET"
+    vlog "SERVICE=$SERVICE, POOL=$POOL, DATASET=$DATASET"
 }
 
 prepare() {
@@ -223,15 +222,15 @@ if [[ "$full_mode" == true ]]; then
     return
 fi
 
-prepare_single_SERVICE
+prepare_single_service
 
 # construct paths
-    NAS_MOUNT=/mnt/$NAS_HOSTNAME/$NAS_SHARE # redefine share, recheck is new $NAS_SHARE mounted
+    NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE # redefine share, recheck is new $NAS_SHARE mounted
     SRCDIR=/mnt/$DATASET/$SERVICE
-    DESTDIR=$NAS_MOUNT/$SERVICE
+    DESTDIR=$NAS_MOUNTP/$SERVICE
     [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$DATASET/$SERVICE
-# case to usb disk (case RESTORE from network to usb not needed)
-    [[ "$USE_USB" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
+# case to usb disk (case restore from network to usb not needed)
+    [[ "$use_usb" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
 
     # Use rsync options from config
     if [[ "$RESTORE" == true ]]; then
@@ -341,9 +340,9 @@ compare() {
 }
 
 
-# --- get blockchain HEIGHT from logs
-get_block_HEIGHT() {
-    local PARSED_HEIGHT=0
+# --- get blockchain height from logs
+get_block_height() {
+    local parsed_height=0
 
     # First try: parse from current log file
     case "$SERVICE" in
@@ -352,31 +351,31 @@ get_block_HEIGHT() {
                 vlog "Looking for height in ${SRCDIR}/debug.log"
                 local update_tip_line=$(tail -n20 "${SRCDIR}/debug.log" | grep UpdateTip | tail -1)
                 if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
-                    PARSED_HEIGHT="${BASH_REMATCH[1]}"
-                    vlog "Parsed Bitcoin HEIGHT: $PARSED_HEIGHT from debug.log"
+                    parsed_height="${BASH_REMATCH[1]}"
+                    vlog "Parsed Bitcoin height: $parsed_height from debug.log"
                 fi
             else
                 vlog "debug.log not found, trying h* files"
-                # Fallback: get HEIGHT from h* files (last backup height)
+                # Fallback: get height from h* files (last backup height)
                 local last_h=$(ls -1t ${SRCDIR}/h[0-9]* 2>/dev/null | head -1)
                 if [ -n "$last_h" ]; then
-                    PARSED_HEIGHT=$(basename "$last_h" | sed 's/h//')
-                    vlog "Got HEIGHT from h* files: $PARSED_HEIGHT"
+                    parsed_height=$(basename "$last_h" | sed 's/h//')
+                    vlog "Got height from h* files: $parsed_height"
                 fi
             fi
             ;;
         monerod)
             if [ -f "${SRCDIR}/bitmonero.log" ]; then
-                # Parse HEIGHT from Synced line: Synced 3495136/3608034
+                # Parse height from Synced line: Synced 3495136/3608034
                 local synced_line=$(tail -n20 "${SRCDIR}/bitmonero.log" | grep "Synced" | tail -1)
                 if [[ "$synced_line" =~ Synced\ ([0-9]+)/[0-9]+ ]]; then
-                    PARSED_HEIGHT="${BASH_REMATCH[1]}"
-                    vlog "Parsed Monero HEIGHT: $PARSED_HEIGHT from bitmonero.log"
+                    parsed_height="${BASH_REMATCH[1]}"
+                    vlog "Parsed Monero height: $parsed_height from bitmonero.log"
                 fi
             fi
             ;;
         chia)
-            # Chia HEIGHT parsing - check multiple log locations
+            # Chia height parsing - check multiple log locations
             local chia_log_files=(
                 "${SRCDIR}/.chia/mainnet/log/debug.log"
                 "${SRCDIR}/.chia/mainnet/log/wallet.log"
@@ -385,35 +384,35 @@ get_block_HEIGHT() {
 
             for log_file in "${chia_log_files[@]}"; do
                 if [ -f "$log_file" ]; then
-                    # Try to parse HEIGHT from various chia log patterns
+                    # Try to parse height from various chia log patterns
                     local height_line=$(tail -n50 "$log_file" | grep -E "(height|Height|block|Block)" | tail -1)
-                    if [[ "$HEIGHT_line" =~ (HEIGHT|Height)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
-                        PARSED_HEIGHT="${BASH_REMATCH[2]}"
-                        vlog "Parsed Chia HEIGHT: $PARSED_HEIGHT from $log_file"
+                    if [[ "$height_line" =~ (HEIGHT|Height)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+                        parsed_height="${BASH_REMATCH[2]}"
+                        vlog "Parsed Chia height: $parsed_height from $log_file"
                         break
-                    elif [[ "$HEIGHT_line" =~ (block|Block)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
-                        PARSED_HEIGHT="${BASH_REMATCH[2]}"
-                        vlog "Parsed Chia block HEIGHT: $PARSED_HEIGHT from $log_file"
+                    elif [[ "$height_line" =~ (block|Block)[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+                        parsed_height="${BASH_REMATCH[2]}"
+                        vlog "Parsed Chia block height: $parsed_height from $log_file"
                         break
                     fi
                 fi
             done
             ;;
         electrs)
-            # electrs doesn't have direct HEIGHT in logs, use bitcoind HEIGHT if available
+            # electrs doesn't have direct height in logs, use bitcoind height if available
             if [ -f "${SRCDIR}/../bitcoind/debug.log" ]; then
                 local update_tip_line=$(tail -n20 "${SRCDIR}/../bitcoind/debug.log" | grep UpdateTip | tail -1)
                 if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
-                    PARSED_HEIGHT="${BASH_REMATCH[1]}"
-                    vlog "Parsed electrs HEIGHT: $PARSED_HEIGHT from bitcoind debug.log"
+                    parsed_height="${BASH_REMATCH[1]}"
+                    vlog "Parsed electrs height: $parsed_height from bitcoind debug.log"
                 fi
             fi
             ;;
     esac
 
-    # Validate parsed HEIGHT is numeric and greater than 0
-    if [[ "$PARSED_HEIGHT" =~ ^[0-9]+$ ]] && [ "$PARSED_HEIGHT" -gt 0 ]; then
-        echo "$PARSED_HEIGHT"
+    # Validate parsed height is numeric and greater than 0
+    if [[ "$parsed_height" =~ ^[0-9]+$ ]] && [ "$parsed_height" -gt 0 ]; then
+        echo "$parsed_height"
     else
         echo "0"
     fi
@@ -430,64 +429,62 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 
-    # Service-specific minimum reasonable HEIGHTs
-    local min_HEIGHT=0
+    # Service-specific minimum reasonable heights
+    local min_height=0
     case "$SERVICE" in
-        bitcoind) min_HEIGHT=700000 ;;   # Bitcoin ~800k, min ~700k
-        monerod)  min_HEIGHT=3000000 ;;  # Monero ~3.5M, min ~3M
-        chia)     min_HEIGHT=800000 ;;   # Chia ~834k, min ~800k
-        electrs)   min_HEIGHT=700000 ;;   # Electrs follows Bitcoin
-        *)         min_HEIGHT=100000 ;;   # Default fallback
+        bitcoind) min_height=700000 ;;   # Bitcoin ~800k, min ~700k
+        monerod)  min_height=3000000 ;;  # Monero ~3.5M, min ~3M
+        chia)     min_height=800000 ;;   # Chia ~834k, min ~800k
+        electrs)   min_height=700000 ;;   # Electrs follows Bitcoin
+        *)         min_height=100000 ;;   # Default fallback
     esac
 
-    # Check if HEIGHT needs to be set (either too low or zero)
-    if [[ "$HEIGHT" -lt "$min_HEIGHT" ]]; then
-        vlog "Current HEIGHT: $HEIGHT, min: $min_HEIGHT - will try detection"
-        # Try to auto-detect HEIGHT from logs
-        local detected_HEIGHT=$(get_block_HEIGHT)
-        vlog "Detected value: '$detected_HEIGHT'"
-        if [[ "$detected_HEIGHT" -gt 0 ]]; then
-            show "Detected blockchain HEIGHT: $detected_HEIGHT"
-            HEIGHT="$detected_HEIGHT"
-            show "Using detected HEIGHT: $HEIGHT"
+    # Check if height needs to be set (either too low or zero)
+    if [[ "$HEIGHT" -lt "$min_height" ]]; then
+        vlog "Current height: $HEIGHT, min: $min_height - will try detection"
+        # Try to auto-detect height from logs
+        local detected_height=$(get_block_height)
+        vlog "Detected value: '$detected_height'"
+        if [[ "$detected_height" -gt 0 ]]; then
+            show "Detected blockchain height: $detected_height"
+            HEIGHT="$detected_height"
+            show "Using detected height: $HEIGHT"
         else
             # Show log snippets for manual reference
-            show "Height too low for $SERVICE (minimum: $min_HEIGHT)"
-            show "Showing recent log entries for manual HEIGHT setting:"
+            show "Height too low for $SERVICE (minimum: $min_height)"
+            show "Showing recent log entries for manual height setting:"
             # bitcoind
             [ -f ${SRCDIR}/debug.log ] && tail -n20 debug.log | grep UpdateTip
-            # example line: 2026-02-11T23:43:57Z UpdateTip: new best=... height=936124 version=...
 
             # monerod
             [ -f ${SRCDIR}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
-            # example line: 2026-02-11 23:52:18.824	[P2P7]	INFO	global	src/cryptonote_protocol/cryptonote_protocol_handler.inl:1618	Synced 3495136/3608034 (96%, 112898 left, 1% of total synced, estimated 14.1 days left)
 
             # chia
-            # no parsable HEIGHT in log file
+            # no parsable height in log file
             #[ -f ${SRCDIR}/.chia/mainnet/log/debug.log ] && tail -n20 ${SRCDIR}/.chia/mainnet/log/debug.log | grep ...
 
             # electrs
             [ -f ${SRCDIR}/db/bitcoin/LOG ] && tail -n20 ${SRCDIR}/db/bitcoin/LOG
 
-            # Ask for manual HEIGHT input only if not detected
-            read -p "Set new Blockchain HEIGHT   : h" HEIGHT
+            # Ask for manual height input only if not detected
+            read -p "Set new Blockchain height   : h" HEIGHT
         fi
 
-        # Show HEIGHT summary (always)
-        show "Remote backuped HEIGHTs found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
-        show "Last backuped HEIGHT             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
-        show "Current detected HEIGHT         : $detected_HEIGHT"
-        show "Current configured HEIGHT          : $HEIGHT"
-        show "Minimum reasonable HEIGHT        : $min_HEIGHT"
+        # Show height summary (always)
+        show "Remote backuped heights found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Last backuped height             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Current detected height         : $detected_height"
+        show "Current configured height          : $HEIGHT"
+        show "Minimum reasonable height        : $min_height"
     fi
 
-    # Validate HEIGHT before proceeding
+    # Validate height before proceeding
     if [[ ! "$HEIGHT" =~ ^[0-9]+$ ]] || [ "$HEIGHT" -le 0 ]; then
-        warn "Error: Invalid HEIGHT value '$HEIGHT'. Must be a positive number."
-        error "invalid HEIGHT $HEIGHT"
+        warn "Error: Invalid height value '$HEIGHT'. Must be a positive number."
+        error "invalid height $HEIGHT"
     fi
 
-    show "Blockchain HEIGHT is now          : $HEIGHT"
+    show "Blockchain height is now          : $HEIGHT"
 
 show ""
 show "Rotate log file started at $(date +%H:%M:%S)"
@@ -499,28 +496,28 @@ show "Rotate log file started at $(date +%H:%M:%S)"
         error "SRCDIR not writable $SRCDIR"
     fi
 
-    # Move existing HEIGHT stamp files more safely
-    vlog "Moving HEIGHT stamp files to h$HEIGHT"
+    # Move existing height stamp files more safely
+    vlog "Moving height stamp files to h$HEIGHT"
     find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" -type f -exec mv -u {} ${SRCDIR}/h$HEIGHT \; 2>/dev/null || true
 
     # Rotate SERVICE-specific log files with validation
     if [ -f ${SRCDIR}/debug.log ]; then
-        vlog "Rotating Bitcoin debug log with HEIGHT $HEIGHT"
+        vlog "Rotating Bitcoin log with height $HEIGHT"
         mv -u ${SRCDIR}/debug.log ${SRCDIR}/debug_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/bitmonero.log ]; then
-        vlog "Rotating Monero log with HEIGHT $HEIGHT"
+        vlog "Rotating Monero log with height $HEIGHT"
         mv -u ${SRCDIR}/bitmonero.log ${SRCDIR}/bitmonero_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/.chia/mainnet/log/debug.log ]; then
-        vlog "Rotating Chia debug log with HEIGHT $HEIGHT"
+        vlog "Rotating Chia log with height $HEIGHT"
         mv -u ${SRCDIR}/.chia/mainnet/log/debug.log ${SRCDIR}/.chia/mainnet/log/debug_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/db/bitcoin/LOG ]; then
-        vlog "Rotating Electrum log with HEIGHT $HEIGHT"
+        vlog "Rotating Electrum log with height $HEIGHT"
         mv -u ${SRCDIR}/db/bitcoin/LOG ${SRCDIR}/electrs_h$HEIGHT.log
     fi
 
@@ -532,9 +529,9 @@ show "Rotate log file started at $(date +%H:%M:%S)"
 # --- snapshot
 snapshot(){
 show "Hint: Best time to take a snapshot is now."
-# snapshot zfs DATASET
-if [ "$IS_ZFS" ]; then
-    show "Prepare DATASET $DATASET for a snapshot..."
+# snapshot zfs dataset
+if [ "$is_zfs" ]; then
+    show "Prepare dataset $DATASET for a snapshot..."
     sync
     sleep 1
     snapname="script-$(date +%Y-%m-%d_%H-%M)"
@@ -559,16 +556,16 @@ if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
     error "Exit"
 fi
 
-# Prevent overwrite if destination is newer (and no FORCE flag set)
+# Prevent overwrite if destination is newer (and no force flag set)
 if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$FORCE" ]; then
     show "Destination is newer (and maybe higher) than the source."
-    show "      Better use RESTORE. A FORCE will ignore this situation. End."
+    show "      Better use RESTORE. A force will ignore this situation. End."
     log "! src-dest comparing triggers abort"
     exit 1
 elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
     show "Destination is newer than the source."
     show "      Force will now overwrite it. This will downgrade the destination."
-    log "src-dest downgrade FORCEd"
+    log "src-dest downgrade forced"
 fi
 
     # machine deop9020m/hpms1
@@ -621,7 +618,7 @@ log "script end"
 # --- main logic
 
 # not args given
-[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|mempool|<SERVICEname> <HEIGHT>|all|RESTORE|VERBOSE|debug|FORCE|mount|umount"; exit 1; }
+[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|mempool|<servicename> <height>|all|restore|verbose|debug|force|mount|umount"; exit 1; }
 
 # Enhanced argument parsing with getopts
 usage() {
@@ -630,15 +627,15 @@ usage() {
     show "COMMANDS:"
     show "  btc|xmr|xch              Backup specific blockchain"
     show "  bitcoind|monerod|chia  Backup specific SERVICE"
-    show "  RESTORE                   Restore blockchain data"
+    show "  restore                   Restore blockchain data"
     show "  mount                     Mount backup destination"
     show "  umount                    Unmount backup destination"
     show "  full|--full              Backup all configured SERVICEs"
     show ""
     show "OPTIONS:"
-    show "  -bh, --HEIGHT N         Set blockchain HEIGHT (numeric)"
-    show "  -f, --FORCE              Force operation (bypass safety checks)"
-    show "  -v, --VERBOSE            Enable VERBOSE output"
+    show "  -bh, --HEIGHT N         Set blockchain height (numeric)"
+    show "  -f, --force              Force operation (bypass safety checks)"
+    show "  -v, --verbose            Enable verbose output"
     show "  -x, --debug              Enable shell debugging"
     show "      --usb                 Use USB device instead of network"
     show "      --SERVICE SERVICE     Target specific SERVICE"
@@ -646,9 +643,9 @@ usage() {
     show "  -h, --help               Show this help message"
     show ""
     show "EXAMPLES:"
-    show "  $0 btc -bh 936125         # Backup Bitcoin at HEIGHT 936125"
-    show "  $0 --SERVICE monerod -v     # Backup Monero with VERBOSE output"
-    show "  $0 RESTORE --FORCE         # Force RESTORE operation"
+    show "  $0 btc -bh 936125         # Backup Bitcoin at height 936125"
+    show "  $0 --SERVICE monerod -v     # Backup Monero with verbose output"
+    show "  $0 restore --force         # Force restore operation"
     show "  $0 --full --host hpms1    # Backup all SERVICEs on hpms1"
     show ""
 }
@@ -673,7 +670,7 @@ while [[ $# -gt 0 ]]; do
             SERVICE="$1"
             shift
             ;;
-        RESTORE)
+        restore)
             RESTORE=true
             shift
             ;;
@@ -686,7 +683,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         --usb)
-            USE_USB=true
+            use_usb=true
             shift
             ;;
         # Options (require arguments)
@@ -707,13 +704,13 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         # Boolean flags
-        -f|--FORCE)
+        -f|--force)
             FORCE=true
             shift
             ;;
-        -v|--VERBOSE)
+        -v|--verbose)
             VERBOSE=true
-            log "VERBOSE now enabled"
+            log "verbose now enabled"
             shift
             ;;
         -x|--debug)
@@ -748,15 +745,15 @@ while [[ $# -gt 0 ]]; do
             elif [[ "$1" =~ ^[0-9]+$ ]]; then
                 HEIGHT="$1"
                 shift
-            elif [[ "$1" == "FORCE" ]]; then
+            elif [[ "$1" == "force" ]]; then
                 FORCE=true
                 shift
-            elif [[ "$1" == "VERBOSE" ]]; then
+            elif [[ "$1" == "verbose" ]]; then
                 VERBOSE=true
-                show "VERBOSE now enabled"
+                show "verbose now enabled"
                 shift
             elif [[ "$1" == "usb" ]]; then
-                USE_USB=true
+                use_usb=true
                 shift
             else
                 warn "Error: Unknown option '$1'"
@@ -770,9 +767,9 @@ done
 # Validate and execute based on parsed arguments
 if [[ -n "$SERVICE" ]]; then
     if [[ "$HEIGHT" -gt 0 ]]; then
-        validate_HEIGHT "$HEIGHT" "$SERVICE" || exit 1
+        validate_height "$HEIGHT" "$SERVICE" || exit 1
     fi
-    [[ "$USE_USB" == true ]] && NAS_MOUNT=/mnt/usb/$NAS_SHARE
+    [[ "$use_usb" == true ]] && NAS_MOUNTP=/mnt/usb/$NAS_SHARE
     [[ "$VERBOSE" == true ]] && show "SERVICE: $SERVICE, HEIGHT: $HEIGHT"
     prepare
     prestop
@@ -784,7 +781,7 @@ elif [[ "$RESTORE" == true ]]; then
     [[ "$FORCE" != true ]] && show "Task ignored. Force not given. Exit." && exit 1
     show "------------------------------------------------------------"
     show "RESTORE: Attention, the direction Source <-> Destination is now changed."
-    log "direction is RESTORE"
+    log "direction is restore"
     prepare
     prestop
     backup_blockchain
@@ -834,17 +831,17 @@ show "=== BACKUP ALL CONFIGURED SERVICES ==="
         SERVICE="$svc_name"
         POOL="$POOL_name"
         DATASET="$POOL/blockchain"
-        IS_ZFS=true
+        is_zfs=true
 
-        # Reset HEIGHT for each SERVICE
+        # Reset height for each SERVICE
         HEIGHT=0
 
         # Set paths for this SERVICE
-        NAS_MOUNT=/mnt/$NAS_HOSTNAME/$NAS_SHARE
+        NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE
         SRCDIR=/mnt/$DATASET/$SERVICE
-        DESTDIR=$NAS_MOUNT/$SERVICE
+        DESTDIR=$NAS_MOUNTP/$SERVICE
         [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$DATASET/$SERVICE
-        [[ "$USE_USB" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
+        [[ "$use_usb" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
 
         # Set rsync options
         if [[ "$RESTORE" == true ]]; then
@@ -894,16 +891,16 @@ if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
     error "Exit"
 fi
 
-# Prevent overwrite if destination is newer (and no FORCE flag set)
+# Prevent overwrite if destination is newer (and no force flag set)
 if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$FORCE" ]; then
     show "Destination is newer (and maybe higher) than the source."
-    show "      Better use RESTORE. A FORCE will ignore this situation. End."
+    show "      Better use RESTORE. A force will ignore this situation. End."
     log "! src-dest comparing triggers abort"
     exit 1
 elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
     show "Destination is newer than the source."
     show "      Force will now overwrite it. This will downgrade the destination."
-    log "src-dest downgrade FORCEd"
+    log "src-dest downgrade forced"
 fi
 
     # Service-specific file copying and folder setup
