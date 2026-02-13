@@ -391,14 +391,23 @@ compare() {
 get_block_HEIGHT() {
     local PARSED_HEIGHT=0
 
+    # First try: parse from current log file
     case "$SERVICE" in
         bitcoind)
             if [ -f "${SRCDIR}/debug.log" ]; then
-                # Parse HEIGHT from UpdateTip line: height=936124
+                vlog "Looking for height in ${SRCDIR}/debug.log"
                 local update_tip_line=$(tail -n20 "${SRCDIR}/debug.log" | grep UpdateTip | tail -1)
                 if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
                     PARSED_HEIGHT="${BASH_REMATCH[1]}"
                     vlog "Parsed Bitcoin HEIGHT: $PARSED_HEIGHT from debug.log"
+                fi
+            else
+                vlog "debug.log not found, trying h* files"
+                # Fallback: get HEIGHT from h* files (last backup height)
+                local last_h=$(ls -1t ${SRCDIR}/h[0-9]* 2>/dev/null | head -1)
+                if [ -n "$last_h" ]; then
+                    PARSED_HEIGHT=$(basename "$last_h" | sed 's/h//')
+                    vlog "Got HEIGHT from h* files: $PARSED_HEIGHT"
                 fi
             fi
             ;;
