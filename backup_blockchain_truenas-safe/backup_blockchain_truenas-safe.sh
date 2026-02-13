@@ -12,7 +12,7 @@ set -euo pipefail
 #   - monerod
 #   - chia
 #   - electrs
-#   - memPOOL
+#   - mempool
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
 version="260213-safe"
@@ -199,7 +199,7 @@ prepare_single_SERVICE() {
         xmr) SERVICE="monerod" ;;
         xch) SERVICE="chia" ;;
         electrs) SERVICE="electrs" ;;
-        memPOOL) SERVICE="memPOOL" ;;
+        mempool) SERVICE="mempool" ;;
         *) SERVICE="$blockchain_type" ;;
     esac
 
@@ -607,7 +607,7 @@ elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
 fi
 
     # machine deop9020m/hpms1
-    [ "$SERVICE" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* memPOOL.dat peers.dat" ${DESTDIR}/
+    [ "$SERVICE" == "bitcoind" ] && cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat" ${DESTDIR}/
     [ "$SERVICE" == "bitcoind" ] && cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
     [ "$SERVICE" == "bitcoind" ] && cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
     [ "$SERVICE" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
@@ -707,7 +707,7 @@ log "script end"
 # --- main logic
 
 # not args given
-[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|memPOOL|<SERVICEname> <HEIGHT>|all|RESTORE|VERBOSE|debug|FORCE|mount|umount"; exit 1; }
+[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|mempool|<SERVICEname> <HEIGHT>|all|RESTORE|VERBOSE|debug|FORCE|mount|umount"; exit 1; }
 
 # Enhanced argument parsing with getopts
 usage() {
@@ -753,7 +753,7 @@ while [[ $# -gt 0 ]]; do
             esac
             shift
             ;;
-        bitcoind|monerod|chia|electrs|memPOOL)
+        bitcoind|monerod|chia|electrs|mempool)
             [[ -n "$TARGET_SERVICE" ]] && { error "Multiple SERVICEs specified"; }
             TARGET_SERVICE="$1"
             SERVICE="$1"
@@ -984,7 +984,7 @@ fi
 
     # Service-specific file copying and folder setup
     if [ "$SERVICE" == "bitcoind" ]; then
-        cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* memPOOL.dat peers.dat" ${DESTDIR}/
+        cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat" ${DESTDIR}/
         cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
         cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
         folder[1]="blocks"; folder[2]="chainstate"
