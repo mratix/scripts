@@ -394,9 +394,9 @@ get_block_HEIGHT() {
     case "$SERVICE" in
         bitcoind)
             if [ -f "${SRCDIR}/debug.log" ]; then
-                # Parse HEIGHT from UpdateTip line: HEIGHT=936124
+                # Parse HEIGHT from UpdateTip line: height=936124
                 local update_tip_line=$(tail -n20 "${SRCDIR}/debug.log" | grep UpdateTip | tail -1)
-                if [[ "$update_tip_line" =~ HEIGHT=([0-9]+) ]]; then
+                if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
                     PARSED_HEIGHT="${BASH_REMATCH[1]}"
                     vlog "Parsed Bitcoin HEIGHT: $PARSED_HEIGHT from debug.log"
                 fi
@@ -440,7 +440,7 @@ get_block_HEIGHT() {
             # electrs doesn't have direct HEIGHT in logs, use bitcoind HEIGHT if available
             if [ -f "${SRCDIR}/../bitcoind/debug.log" ]; then
                 local update_tip_line=$(tail -n20 "${SRCDIR}/../bitcoind/debug.log" | grep UpdateTip | tail -1)
-                if [[ "$update_tip_line" =~ HEIGHT=([0-9]+) ]]; then
+                if [[ "$update_tip_line" =~ height=([0-9]+) ]]; then
                     PARSED_HEIGHT="${BASH_REMATCH[1]}"
                     vlog "Parsed electrs HEIGHT: $PARSED_HEIGHT from bitcoind debug.log"
                 fi
@@ -494,7 +494,7 @@ fi
             show "Showing recent log entries for manual HEIGHT setting:"
             # bitcoind
             [ -f ${SRCDIR}/debug.log ] && tail -n20 debug.log | grep UpdateTip
-            # example line: 2026-02-11T23:43:57Z UpdateTip: new best=000000000000000000015ca4e4a3fa112840d412315e42c4e89ec22dfdcf158f HEIGHT=936124 version=0x2478c000 log2_work=96.079058 tx=1308589657 date='2026-02-11T23:43:48Z' progress=1.000000 cache=5.1MiB(37068txo)
+            # example line: 2026-02-11T23:43:57Z UpdateTip: new best=... height=936124 version=...
 
             # monerod
             [ -f ${SRCDIR}/bitmonero.log ] && tail -n20 bitmonero.log | grep Synced
