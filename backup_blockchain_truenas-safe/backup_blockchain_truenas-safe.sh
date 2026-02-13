@@ -483,11 +483,8 @@ fi
         local detected_HEIGHT=$(get_block_HEIGHT)
         if [[ "$detected_HEIGHT" -gt 0 ]]; then
             show "Detected blockchain HEIGHT: $detected_HEIGHT"
-            show "Minimum reasonable HEIGHT for $SERVICE: $min_HEIGHT"
-            read -p "Use detected HEIGHT? (Y/n): " confirm
-            if [[ "$confirm" != "n" && "$confirm" != "N" ]]; then
-                HEIGHT="$detected_HEIGHT"
-            fi
+            HEIGHT="$detected_HEIGHT"
+            show "Using detected HEIGHT: $HEIGHT"
         else
             # Show log snippets for manual reference
             show "Height too low for $SERVICE (minimum: $min_HEIGHT)"
@@ -510,9 +507,12 @@ fi
 
         # Enhanced HEIGHT file listing with better pattern matching
         show "Remote backuped HEIGHTs found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
-        show "Local working HEIGHT is           : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Last backuped HEIGHT             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Current detected HEIGHT         : $detected_HEIGHT"
         show "Current configured HEIGHT          : $HEIGHT"
-        show "Minimum reasonable HEIGHT for $SERVICE: $min_HEIGHT"
+        show "Last backuped HEIGHT             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Current configured HEIGHT          : $HEIGHT"
+        show "Minimum reasonable HEIGHT        : $min_HEIGHT"
         show "------------------------------------------------------------"
         read -p "Set new Blockchain HEIGHT   : h" HEIGHT
     fi
