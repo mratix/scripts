@@ -1,9 +1,12 @@
 #!/bin/bash
-set -Eeuo pipefail
+set -euo pipefail
 # ============================================================
 # Backup & restore script for blockchain nodes on TrueNAS Scale
 # Gold Release v1.1.8
 # Maintenance release: Logic errors elimination, stability, fine-tuning
+#
+# NOTE: All scripts (gold/enterprise/safe/pacman) and *.conf files
+#       live together in $HOME/scripts - keep them compatible!
 #
 # Supported blockchains and services:
 #   - bitcoind
@@ -99,10 +102,11 @@ VERBOSE="${VERBOSE:-false}"
 # Logging helpers
 #
 show() { echo "$*"; }
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"; }
+log() { echo "$(date +'%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOGFILE"; }
+#vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2 || true; }
 vlog() { $VERBOSE || return 0; log "> $*"; }
-warn() { log "Warning: $*"; }
-error() { log "ERROR: $*"; exit 1; }
+warn() { log "WARNING: $*"; }
+error() { log "ERROR: $*" >&2; exit 1; }
 
 ########################################
 # Statefile helpers (minimal audit trail)
@@ -1449,4 +1453,9 @@ exit "$EXIT_CODE"
 
 # ------------------------------------------------------------------------
 # errors
+- chia startup delay, recheck
+root@9e35f18816ce:/chia-blockchain# chia show --state
+Error: Connection error: ClientConnectorError: Cannot connect to host 127.0.0.1:8555 ssl:<ssl.SSLContext object at 0x7fae916e0560> [Connect call failed ('127.0.0.1', 8555)]
+Check if full node rpc is running at 8555
+This is normal if full node is still starting up
 

@@ -12,6 +12,7 @@
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
 version="260210-initial"
+# Refactor & extensions: ChatGPT codex, OpenCode <- With best thanks for the support
 # ============================================================
 
 # --------------------------
@@ -36,15 +37,18 @@ COINS=0
 # 1 = sehr viel Erklärung
 # 5 = minimal / technisch
 
-log()  { [ "$USER_LEVEL" -le 3 ] && echo "$@"; }
-log1() { [ "$USER_LEVEL" -le 1 ] && echo "$@"; } # Zeile 40: [: : Ganzzahliger Ausdruck erwartet
-log2() { [ "$USER_LEVEL" -le 2 ] && echo "$@"; }
-log3() { [ "$USER_LEVEL" -le 3 ] && echo "$@"; } # Zeile 42: [: : Ganzzahliger Ausdruck erwartet
-log4() { [ "$USER_LEVEL" -le 4 ] && echo "$@"; }
-log5() { [ "$USER_LEVEL" -le 5 ] && echo "$@"; }
+# Standardized logging with timestamps
+log_base() { echo "$(date +'%Y-%m-%d %H:%M:%S') [$1] $2"; }
 
-warn() { echo "⚠️  $@"; }
-err()  { echo "❌ $@"; }
+log()  { [ "${USER_LEVEL:-5}" -le 3 ] && log_base "INFO" "$*"; }
+log1() { [ "${USER_LEVEL:-5}" -le 1 ] && log_base "DEBUG" "$*"; }
+log2() { [ "${USER_LEVEL:-5}" -le 2 ] && log_base "VERBOSE" "$*"; }
+log3() { [ "${USER_LEVEL:-5}" -le 3 ] && log_base "INFO" "$*"; }
+log4() { [ "${USER_LEVEL:-5}" -le 4 ] && log_base "WARN" "$*"; }
+log5() { [ "${USER_LEVEL:-5}" -le 5 ] && log_base "ERROR" "$*" >&2; }
+
+warn() { log_base "WARN" "⚠️  $*"; }
+err()  { log_base "ERROR" "❌ $*" >&2; }
 
 # --------------------------
 # HELPER FUNCTIONS
@@ -82,7 +86,7 @@ ask_continue_or_restart() {
   case "$_choice" in
     1) return 0 ;;
     2) restart_script "$@" ;;
-    3) echo "Alles klar. Script beendet."; end ;;
+    0) echo "Alles klar. Script beendet."; exit 0 ;;
     *) echo "Ungültige Auswahl."; ask_continue_or_restart "$@" ;;
   esac
 }
@@ -654,18 +658,6 @@ do_backup() {
   esac
 
   pause
-  main_menu
-}
-
-# --------------------------
-# COMPARE (PLACEHOLDER)
-# --------------------------
-
-do_compare() {
-  echo
-  echo "🔍 Vergleichsmodus (noch nicht implementiert)"
-  pause
-  award_coins 75
   main_menu
 }
 

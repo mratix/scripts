@@ -59,7 +59,7 @@ SRCDIR=""
 DESTDIR=""
 folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
 USBDEV="/dev/sdf1"
-RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
+RSYNC_OPTS=""
 full_mode=false
 TARGET_SERVICE=""
 TARGET_HOST=""
@@ -67,9 +67,10 @@ TARGET_HOST=""
 # --- logger
 show() { echo "$*"; }
 log() { echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
-vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2 || true; }
-warn() { echo "$(date +'%Y-%m-%d %H:%M:%S') WARNING: $*"; }
-error() { echo "$(date +'%Y-%m-%d %H:%M:%S') ERROR: $*" >&2; exit 1; }
+#vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2 || true; }
+vlog() { $VERBOSE || return 0; log "> $*"; }
+warn() { log "WARNING: $*"; }
+error() { log "ERROR: $*" >&2; exit 1; }
 
 
 # --- Validate height input
@@ -94,15 +95,15 @@ validate_height() {
             ;;
         chia)
             # Chia height can vary, use reasonable range
-            if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
-                warn "Invalid Chia height: $input_height (should be 1-8 digits)"
+            if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
+                warn "Invalid Chia height: $input_height (should be 6-8 digits)"
                 return 1
             fi
             ;;
         *)
             # undefined case, exit
             warn "Error: Invalid argument '$1'"
-            show "Usage: $0 btc|xmr|xch|electrs|<servicename> <height>|all|restore|verbose|force|mount|umount"
+            show "Usage: $0 btc|xmr|xch|electrs|mempool|<servicename> <height>|all|restore|verbose|force|mount|umount"
             exit 1
         ;;
     esac
@@ -114,7 +115,7 @@ validate_height() {
 
 # --- mount destination
 mount_dest(){
-vlog "mount_dest__"
+vlog "__mount_dest__"
 
 [ ! -d "$NAS_MOUNTP" ] && mkdir -p $NAS_MOUNTP
 if [[ "$use_usb" == true ]]; then
@@ -181,9 +182,6 @@ unmount_dest(){
 prepare(){
 show "Script started at $(date +%H:%M:%S)"
 log "script $version started"
-
-# TODO: move SERVICE_CONFIGS mapping to gold/enterprise version
-# TODO: implement host/SERVICE auto-detection from SERVICE_CONFIGS
 }
 
 # Enhanced prepare function for single SERVICE or full mode
@@ -217,6 +215,13 @@ prepare() {
 show "Script started at $(date +%H:%M:%S)"
 log "script started"
 
+# rsync options
+if [[ "$VERBOSE" == true ]]; then
+    RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
+else
+    RSYNC_OPTS="-avz --update --delete"
+fi
+
 if [[ "$full_mode" == true ]]; then
     show "=== FULL MODE: Backup all configured SERVICEs ==="
     return
@@ -232,24 +237,6 @@ prepare_single_service
 # case to usb disk (case restore from network to usb not needed)
     [[ "$use_usb" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
 
-    # Use rsync options from config
-    if [[ "$RESTORE" == true ]]; then
-        RSYNC_OPTS="${RSYNC_CONFIGS[RESTORE]}"
-    elif [[ -n "${RSYNC_CONFIGS[$SERVICE]:-}" ]]; then
-        RSYNC_OPTS="${RSYNC_CONFIGS[$SERVICE]}"
-        if [[ "$VERBOSE" != true ]]; then
-            RSYNC_OPTS="${RSYNC_OPTS//--stats/}"
-            RSYNC_OPTS="${RSYNC_OPTS//--info=progress2/}"
-            RSYNC_OPTS="${RSYNC_OPTS//--info=progress/}"
-            RSYNC_OPTS="${RSYNC_OPTS//-P/}"
-        fi
-    else
-        if [[ "$VERBOSE" == true ]]; then
-            RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
-        else
-            RSYNC_OPTS="-avz --update --delete"
-        fi
-    fi
 
 # output results
     show "------------------------------------------------------------"
@@ -269,17 +256,17 @@ mount_dest
 
 # --- pre-tasks, stop SERVICE
 prestop(){
-vlog "prestop__"
+vlog "__prestop__"
 
-    show "Checking active service..."
-    # Wait for SERVICE to stop with timeout
-    local timeout=300  # 5 minutes max wait
+    show "Time to stop running service: $SERVICE"
+    # Wait for service to stop with timeout
+    local timeout=180  # 3 minutes max wait
     local elapsed=0
     local check_interval=10
 
     while [ $elapsed -lt $timeout ]; do
         if [ -f "${SRCDIR}/$SERVICE.pid" ]; then
-            show "Wait for process $SERVICE to stop... (${elapsed}s elapsed)"
+            show "  Wait for process to stop... (${elapsed}s elapsed)"
             sleep $check_interval
             ((elapsed += check_interval))
         else
@@ -288,13 +275,13 @@ vlog "prestop__"
         fi
     done
 
-# --- service check, final verification
+# service check, final verification
 if [ -f "${SRCDIR}/$SERVICE.pid" ]; then
     show "Warning: Service may still be running after $timeout seconds."
     show "Please verify manually that ${SERVICE} is stopped before proceeding."
     read -r -p "Continue anyway? (y/N): " -t 30 confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        warn "Aborting due to potentially running SERVICE."
+        warn "Aborting due to potentially running service."
         exit 1
     fi
 else
@@ -418,7 +405,7 @@ get_block_height() {
     fi
 }
 
-# --- pre-tasks, update stamps
+# --- pre-tasks, update height-stamps
 prebackup(){
 cd $SRCDIR
 
@@ -467,15 +454,15 @@ fi
             [ -f ${SRCDIR}/db/bitcoin/LOG ] && tail -n20 ${SRCDIR}/db/bitcoin/LOG
 
             # Ask for manual height input only if not detected
-            read -p "Set new Blockchain height   : h" HEIGHT
+            read -p "Set new Blockchain height     : h" HEIGHT
         fi
 
         # Show height summary (always)
-        show "Remote backuped heights found     : $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
-        show "Last backuped height             : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
-        show "Current detected height         : $detected_height"
-        show "Current configured height          : $HEIGHT"
-        show "Minimum reasonable height        : $min_height"
+        show "Remote backuped heights found: $(find ${DESTDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Last backuped height         : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
+        show "Current detected height      : $detected_height"
+        show "Current configured height    : $HEIGHT"
+        show "Minimum reasonable height    : $min_height"
     fi
 
     # Validate height before proceeding
@@ -484,7 +471,7 @@ fi
         error "invalid height $HEIGHT"
     fi
 
-    show "Blockchain height is now          : $HEIGHT"
+    show "Blockchain height is now         : $HEIGHT"
 
 show ""
 show "Rotate log file started at $(date +%H:%M:%S)"
@@ -493,34 +480,33 @@ show "Rotate log file started at $(date +%H:%M:%S)"
     # Validate source directory exists and is writable
     if [[ ! -w "$SRCDIR" ]]; then
         warn "Error: Source directory $SRCDIR is not writable."
-        error "SRCDIR not writable $SRCDIR"
+        error "SRCDIR $SRCDIR not writable"
     fi
 
     # Move existing height stamp files more safely
-    vlog "Moving height stamp files to h$HEIGHT"
+    log "Set height stamp to h$HEIGHT"
     find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" -type f -exec mv -u {} ${SRCDIR}/h$HEIGHT \; 2>/dev/null || true
 
     # Rotate SERVICE-specific log files with validation
     if [ -f ${SRCDIR}/debug.log ]; then
-        vlog "Rotating Bitcoin log with height $HEIGHT"
+        log "Rotating Bitcoin log with height $HEIGHT"
         mv -u ${SRCDIR}/debug.log ${SRCDIR}/debug_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/bitmonero.log ]; then
-        vlog "Rotating Monero log with height $HEIGHT"
+        log "Rotating Monero log with height $HEIGHT"
         mv -u ${SRCDIR}/bitmonero.log ${SRCDIR}/bitmonero_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/.chia/mainnet/log/debug.log ]; then
-        vlog "Rotating Chia log with height $HEIGHT"
+        log "Rotating Chia log with height $HEIGHT"
         mv -u ${SRCDIR}/.chia/mainnet/log/debug.log ${SRCDIR}/.chia/mainnet/log/debug_h$HEIGHT.log
     fi
 
     if [ -f ${SRCDIR}/db/bitcoin/LOG ]; then
-        vlog "Rotating Electrum log with height $HEIGHT"
+        log "Rotating Electrum log with height $HEIGHT"
         mv -u ${SRCDIR}/db/bitcoin/LOG ${SRCDIR}/electrs_h$HEIGHT.log
     fi
-
     # Clean up old log files safely
     find ${SRCDIR}/db/bitcoin/LOG.old* -type f -exec rm {} \; 2>/dev/null || true
 }
@@ -548,7 +534,7 @@ cd $SRCDIR
 
 show ""
 show "Main task started at $(date +%H:%M:%S)"
-log "start task backup pre"
+vlog "backup_blockchain__pre"
 
 # Ensure both timestamps are valid numbers
 if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
@@ -559,26 +545,40 @@ fi
 # Prevent overwrite if destination is newer (and no force flag set)
 if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$FORCE" ]; then
     show "Destination is newer (and maybe higher) than the source."
-    show "      Better use RESTORE. A force will ignore this situation. End."
-    log "! src-dest comparing triggers abort"
+    show "Better use RESTORE. A force will ignore this situation. End."
+    error "src-dest comparing triggers abort"
     exit 1
 elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
     show "Destination is newer than the source."
-    show "      Force will now overwrite it. This will downgrade the destination."
+    show "Force will now overwrite it. This will downgrade the destination backup."
     log "src-dest downgrade forced"
 fi
 
-    # machine deop9020m/hpms1
-    [ "$SERVICE" == "bitcoind" ] && cp -u anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat ${DESTDIR}/ 2>/dev/null || true
-    [ "$SERVICE" == "bitcoind" ] && cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
-    [ "$SERVICE" == "bitcoind" ] && cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
-    [ "$SERVICE" == "bitcoind" ] && { folder[1]="blocks"; folder[2]="chainstate"; }
-    [ "$SERVICE" == "bitcoind" ] && [ -f "${SRCDIR}/indexes/coinstats/db/CURRENT" ] && { folder[3]="indexes"; } || { folder[3]="indexes/blockfilter"; folder[4]="indexes/txindex"; }
-
-    # machine hpms1
-    [ "$SERVICE" == "monerod" ] && cp -u "bitmonero*.log h[0-9]* p2pstate.* rpc_ssl.*" ${DESTDIR}/
-    [ "$SERVICE" == "monerod" ] && folder[1]="lmdb"
-    [ "$SERVICE" == "chia" ] && { folder[1]=".chia"; folder[2]=".chia_keys"; folder[3]="plots"; }
+case "$SERVICE" in
+    btc)
+        cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat mempool.dat peers.dat" ${DESTDIR}/ 2>/dev/null || true
+        cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
+        cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
+        folder[1]="blocks"; folder[2]="chainstate":
+        if [[ -f "${SRCDIR}/indexes/coinstats/db/CURRENT" || \
+              -f "${SRCDIR}/indexes/coinstatsindex/db/CURRENT" ]]; then
+            folder[3]="indexes"
+        else
+            folder[3]="indexes/blockfilter"
+            folder[4]="indexes/txindex"
+        fi
+    ;;
+    xmr)
+        cp -u "bitmonero*.log p2pstate.* rpc_ssl.*" ${DESTDIR}/
+        folder[1]="lmdb"
+    ;;
+    xch)
+        folder[1]=".chia"
+        folder[2]=".chia_keys"
+        folder[3]="plots"
+    ;;
+esac
+    cp -u "h[0-9]*" ${DESTDIR}/ 2>/dev/null || true
 
 i=1
 while [ "${folder[i]}" != "" ]; do
@@ -625,28 +625,28 @@ usage() {
     show "Usage: $0 [OPTIONS] [COMMAND] [ARGS]"
     show ""
     show "COMMANDS:"
-    show "  btc|xmr|xch              Backup specific blockchain"
-    show "  bitcoind|monerod|chia  Backup specific SERVICE"
+    show "  btc|xmr|xch               Backup specific blockchain"
+    show "  bitcoind|monerod|chia|electrs|mempool   Backup specific service"
+    show "  all|--full                Backup all configured services"
     show "  restore                   Restore blockchain data"
     show "  mount                     Mount backup destination"
     show "  umount                    Unmount backup destination"
-    show "  full|--full              Backup all configured SERVICEs"
     show ""
     show "OPTIONS:"
-    show "  -bh, --HEIGHT N         Set blockchain height (numeric)"
-    show "  -f, --force              Force operation (bypass safety checks)"
-    show "  -v, --verbose            Enable verbose output"
-    show "  -x, --debug              Enable shell debugging"
+    show "  -bh, --height N           Set blockchain height (numeric)"
+    show "  -f, --force               Force operation (bypass safety checks)"
+    show "  -v, --verbose             Enable verbose output"
+    show "  -x, --debug               Enable shell debugging"
     show "      --usb                 Use USB device instead of network"
-    show "      --SERVICE SERVICE     Target specific SERVICE"
-    show "      --host HOSTNAME      Target specific host (for --full)"
-    show "  -h, --help               Show this help message"
+    show "      --service SERVICE     Target specific service"
+    show "      --host HOSTNAME       Target specific node (for --full)"
+    show "  -h, --help                Show this help message"
     show ""
     show "EXAMPLES:"
     show "  $0 btc -bh 936125         # Backup Bitcoin at height 936125"
-    show "  $0 --SERVICE monerod -v     # Backup Monero with verbose output"
-    show "  $0 restore --force         # Force restore operation"
-    show "  $0 --full --host hpms1    # Backup all SERVICEs on hpms1"
+    show "  $0 --service monerod -v   # Backup Monero with verbose output"
+    show "  $0 restore --force        # Force restore operation"
+    show "  $0 --full --host hpms1    # Backup all services on node hpms1"
     show ""
 }
 
@@ -687,12 +687,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         # Options (require arguments)
-        -bh|--HEIGHT)
+        -bh|--height)
             [[ -z "${2:-}" ]] && { error "--HEIGHT requires a value"; }
             HEIGHT="$2"
             shift 2
             ;;
-        --SERVICE)
+        --service)
             [[ -z "${2:-}" ]] && { error "--SERVICE requires a value"; }
             SERVICE="$2"
             TARGET_SERVICE="$2"
@@ -718,7 +718,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         # Aliases and special cases
-        full|-a|--full)
+        all|--full)
             full_mode=true
             shift
             ;;
@@ -781,7 +781,7 @@ elif [[ "$RESTORE" == true ]]; then
     [[ "$FORCE" != true ]] && show "Task ignored. Force not given. Exit." && exit 1
     show "------------------------------------------------------------"
     show "RESTORE: Attention, the direction Source <-> Destination is now changed."
-    log "direction is restore"
+    vlog "direction is restore"
     prepare
     prestop
     backup_blockchain
@@ -789,11 +789,11 @@ elif [[ "$RESTORE" == true ]]; then
 fi
 
 # --- full mode implementation
-backup_all_SERVICEs() {
+backup_all_services() {
 show "=== BACKUP ALL CONFIGURED SERVICES ==="
 
     # Get all available SERVICE configurations
-    local all_SERVICEs=()
+    local all_services=()
     local hostname_target="${TARGET_HOST:-$(hostname -s)}"
 
     for config_key in "${!SERVICE_CONFIGS[@]}"; do
@@ -801,35 +801,35 @@ show "=== BACKUP ALL CONFIGURED SERVICES ==="
         local config_host="${config_key%_*}"
         if [[ "$config_host" == "$hostname_target" ]]; then
             local service_config="${SERVICE_CONFIGS[$config_key]}"
-            IFS=':' read -r svc_name POOL_name <<< "$SERVICE_config"
-            all_SERVICEs+=("$svc_name:$POOL_name")
+            IFS=':' read -r svc_name pool_name <<< "$service_config"
+            all_services+=("$svc_name:$pool_name")
         fi
     done
 
-    if [[ ${#all_SERVICEs[@]} -eq 0 ]]; then
-        show "No SERVICEs configured for host: $hostname_target"
+    if [[ ${#all_services[@]} -eq 0 ]]; then
+        show "No services configured for host: $hostname_target"
         exit 1
     fi
 
-    show "Found SERVICEs to backup:"
-    for SERVICE_entry in "${all_SERVICEs[@]}"; do
-        IFS=':' read -r svc_name POOL_name <<< "$SERVICE_entry"
-        show "  - $svc_name (POOL: $POOL_name)"
+    show "Found services to backup:"
+    for service_entry in "${all_services[@]}"; do
+        IFS=':' read -r svc_name pool_name <<< "$service_entry"
+        show "  - $svc_name (POOL: $pool_name)"
     done
 
     show "------------------------------------------------------------"
-    show "Starting full backup of all SERVICEs..."
+    log "Starting full backup of all services..."
 
     # Backup each SERVICE
-    for SERVICE_entry in "${all_SERVICEs[@]}"; do
-        IFS=':' read -r svc_name POOL_name <<< "$SERVICE_entry"
+    for service_entry in "${all_services[@]}"; do
+        IFS=':' read -r svc_name pool_name <<< "$service_entry"
 
         show ""
-        show "=== Backing up SERVICE: $svc_name ==="
+        show "=== Backing up service $svc_name ==="
 
         # Set global variables for this SERVICE
         SERVICE="$svc_name"
-        POOL="$POOL_name"
+        POOL="$pool_name"
         DATASET="$POOL/blockchain"
         is_zfs=true
 
@@ -843,25 +843,6 @@ show "=== BACKUP ALL CONFIGURED SERVICES ==="
         [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$DATASET/$SERVICE
         [[ "$use_usb" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
 
-        # Set rsync options
-        if [[ "$RESTORE" == true ]]; then
-            RSYNC_OPTS="${RSYNC_CONFIGS[RESTORE]}"
-        elif [[ -n "${RSYNC_CONFIGS[$SERVICE]:-}" ]]; then
-            RSYNC_OPTS="${RSYNC_CONFIGS[$SERVICE]}"
-            if [[ "$VERBOSE" != true ]]; then
-                RSYNC_OPTS="${RSYNC_OPTS//--stats/}"
-                RSYNC_OPTS="${RSYNC_OPTS//--info=progress2/}"
-                RSYNC_OPTS="${RSYNC_OPTS//--info=progress/}"
-                RSYNC_OPTS="${RSYNC_OPTS//-P/}"
-            fi
-        else
-            if [[ "$VERBOSE" == true ]]; then
-                RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
-            else
-            RSYNC_OPTS="-avz --update --delete"
-            fi
-        fi
-
         # Run backup workflow for this SERVICE
         prestop
         prebackup
@@ -869,7 +850,7 @@ show "=== BACKUP ALL CONFIGURED SERVICES ==="
         backup_blockchain_single
         postbackup
 
-        show "Service $svc_name backup completed."
+        log "Service $svc_name backup completed."
         show "------------------------------------------------------------"
     done
 
@@ -934,14 +915,17 @@ done
 show "------------------------------------------------------------"
 log "end task backup main"
 }
-
 # --- main logic end
+
+log "Script finished successfully"
 exit 0
 
 # ------------------------------------------------------------------------
 # todos
-TODO: Add host/SERVICE mapping for gold/enterprise version, not for safe version
-
+# todo: add full backup (all services) for gold/enterprise version, remove from safe version
+# TODO: move SERVICE_CONFIGS mapping to gold/enterprise version
+# TODO: implement host/SERVICE auto-detection from SERVICE_CONFIGS
+# todo: apply functional blockheight logfile-parsing to gold/enterprise version
 # ------------------------------------------------------------------------
 # errors
 
