@@ -756,7 +756,7 @@ vlog "__get_block_height__"
 normalize_block_height() {
     local value="$1"
     sed -nE 's/^([0-9]+)$/\1/p' <<<"${value}" | head -n1
-    vlog "normalize block height: $value"
+    vlog "Normalize block height: $value"
 }
 
 resolve_block_height() {
