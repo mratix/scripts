@@ -84,14 +84,61 @@ backup_tar() {
 
 # Backup file system with rsync
 sync_data() {
-    echo "Task not implemented, but included in task 'tar'."
+    local old_share="$NAS_SHARE"
+    local old_mountp="$NAS_MOUNTP"
 
-    # daily merge task
-    # sync          $HOME/scripts/      smb://$NAS_HOSTNAME/home/scripts/
-    # upload,sync   $HOME/Dokumente/    smb://$NAS_HOSTNAME/data/documents/
-    # mv            $HOME/Downloads/    smb://$NAS_HOSTNAME/public/downloads/
-    # mv            $HOME/Musik/        smb://$NAS_HOSTNAME/home/music/
-    # sync          $HOME/Videos/       smb://$NAS_HOSTNAME/home/videos/
+    rsync_twoway() {
+        local src="$1"
+        local dst="$2"
+
+        [ -d "$src" ] || return 0
+        mkdir -p "$dst"
+        if ! rsync -au "$src" "$dst"; then
+            warn "Error: task data twoway push $src -> $dst"
+        fi
+        if ! rsync -au "$dst" "$src"; then
+            warn "Error: task data twoway pull $dst -> $src"
+        fi
+    }
+
+    rsync_move() {
+        local src="$1"
+        local dst="$2"
+
+        [ -d "$src" ] || return 0
+        mkdir -p "$dst"
+        if ! rsync -au --remove-source-files "$src" "$dst"; then
+            warn "Error: task data move $src -> $dst"
+            return 0
+        fi
+        find "$src" -type d -empty -delete || true
+    }
+
+    vlog "mybackup: task data"
+
+    NAS_SHARE="home"
+    NAS_MOUNTP="/mnt/$NAS_HOSTNAME/$NAS_SHARE"
+    mount_nas
+    rsync_twoway "$HOME/scripts/" "$NAS_MOUNTP/scripts/"
+    rsync_move "$HOME/Musik/" "$NAS_MOUNTP/music/"
+    rsync_twoway "$HOME/Videos/" "$NAS_MOUNTP/videos/"
+    umount_nas
+
+    NAS_SHARE="data"
+    NAS_MOUNTP="/mnt/$NAS_HOSTNAME/$NAS_SHARE"
+    mount_nas
+    rsync_twoway "$HOME/Dokumente/" "$NAS_MOUNTP/documents/"
+    umount_nas
+
+    NAS_SHARE="public"
+    NAS_MOUNTP="/mnt/$NAS_HOSTNAME/$NAS_SHARE"
+    mount_nas
+    rsync_move "$HOME/Downloads/" "$NAS_MOUNTP/downloads/"
+    umount_nas
+
+    NAS_SHARE="$old_share"
+    NAS_MOUNTP="$old_mountp"
+    vlog "mybackup: task data Ended at $(date)"
 }
 
 
