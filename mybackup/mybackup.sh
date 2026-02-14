@@ -123,6 +123,15 @@ rotate_all_local_sql_dumps() {
 backup_tar() {
     local destfile=""
     local split_limit_bytes="${TAR_SPLIT_LIMIT_BYTES:-1073741824}" # 1 GiB
+    local -a tar3_sources=(/home)
+
+    rotate_all_local_sql_dumps
+
+    if [ "$(id -u)" -eq 0 ]; then
+        tar3_sources=(/root /home)
+    else
+        warn "task tar3: running without root, /root will be skipped."
+    fi
 
     split_archive_if_large() {
         local archive="$1"
@@ -167,17 +176,23 @@ backup_tar() {
     destfile="${destbakpath}/${today}/home-$(date +"%y%m%d%H%M").tar.gz"
     if ! tar \
         --warning=no-file-changed \
+        --ignore-failed-read \
         --exclude ".bash_history " \
         "${COMMON_TAR_EXCLUDES[@]}" \
         --exclude '*/_*' \
         --exclude '*/cronas?_*' \
+        --exclude '/home/mratix/esphome/*/.piolibdeps/*' \
+        --exclude '/home/mratix/.local/lib/python*/site-packages/*' \
+        --exclude '/home/mratix/.local/share/gvfs-metadata/*' \
+        --exclude '/home/mratix/.local/share/tracker/*' \
+        --exclude '/home/mratix/.local/share/keyrings/*' \
         --exclude "datareporting" \
         --exclude "Musik" \
         --exclude "Thumbnails" \
         --exclude "Videos" \
         -zcvf "$destfile" \
-        /root /home; then
-        warn "Error: task tar3 /root /home"
+        "${tar3_sources[@]}"; then
+        warn "Error: task tar3 ${tar3_sources[*]}"
     else
         split_archive_if_large "$destfile"
     fi
@@ -431,7 +446,6 @@ case "$cmd" in
         ;;
     tar)
         mount_nas
-        rotate_all_local_sql_dumps
         backup_tar
         backup_mysqlaio
         umount_nas

@@ -62,6 +62,13 @@ Hinweise:
 - `users` erlaubt Mount/Umount fuer normale User.
 - `gid=100` passt zur Gruppe `users`.
 - Bei mehreren Usern ist `0660/0770` praxisnaher als `0640/0750`.
+- Die `credentials=` Datei muss fuer den aufrufenden User lesbar sein.
+
+Aktueller produktiver Eintrag:
+
+```fstab
+//192.168.178.20/backups /mnt/cronas/backups cifs rw,_netdev,nofail,noauto,users,vers=3.1.1,credentials=/home/rsync/.smbcredentials,uid=1001,gid=100,file_mode=0660,dir_mode=0770 0 0
+```
 
 ## SSH Key Setup fuer `www`
 
