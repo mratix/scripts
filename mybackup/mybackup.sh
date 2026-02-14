@@ -68,7 +68,7 @@ backup_tar() {
     # task 1
     vlog "mybackup: task tar1"
     destfile="${destbakpath}/${today}/rootfs-$(date +"%y%m%d%H%M").tar.gz"
-    if ! tar --exclude="*/proc/*" --exclude="*/dev/*" "${COMMON_TAR_EXCLUDES[@]}" -zcvf "$destfile" "$SRCDIR1"; then
+    if ! tar --warning=no-file-changed --exclude="*/proc/*" --exclude="*/dev/*" "${COMMON_TAR_EXCLUDES[@]}" -zcvf "$destfile" "$SRCDIR1"; then
         warn "Error: task tar1 $SRCDIR1"
     else
         split_archive_if_large "$destfile"
@@ -77,7 +77,7 @@ backup_tar() {
     # task 2
     vlog "mybackup: task tar2"
     destfile="${destbakpath}/${today}/www-$(date +"%y%m%d%H%M").tar.gz"
-    if ! tar "${COMMON_TAR_EXCLUDES[@]}" -zcvf "$destfile" "$SRCDIR2"; then
+    if ! tar --warning=no-file-changed "${COMMON_TAR_EXCLUDES[@]}" -zcvf "$destfile" "$SRCDIR2"; then
         warn "Error: task tar2 $SRCDIR2"
     else
         split_archive_if_large "$destfile"
@@ -87,6 +87,7 @@ backup_tar() {
     vlog "mybackup: task tar3"
     destfile="${destbakpath}/${today}/home-$(date +"%y%m%d%H%M").tar.gz"
     if ! tar \
+        --warning=no-file-changed \
         --exclude ".bash_history " \
         "${COMMON_TAR_EXCLUDES[@]}" \
         --exclude '*/_*' \
@@ -257,7 +258,7 @@ backup_mysql() {
     local dumpfile=""
 
     vlog "mybackup: task mysqldump"
-    DBS="$(mysql -h "$SQL_HOST" -u "$SQL_USER" -p"${SQL_PASSWD}" -Bse 'show databases')"
+    DBS="$(mysql -h "$SQL_HOST" -u "$SQL_USER" --password="${SQL_PASSWD}" -Bse 'show databases')"
 
     mkdir -p "$sqlbakpath" "$sqllocalpath"
 
@@ -272,7 +273,7 @@ backup_mysql() {
 
         dumpfile="/tmp/${db}.sql"
 
-        if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" -p"${SQL_PASSWD}" -B "$db" > "$dumpfile"; then
+        if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" --password="${SQL_PASSWD}" -B "$db" > "$dumpfile"; then
             warn "Error: task mysqldump for $db"
             continue
         fi
@@ -303,7 +304,7 @@ backup_mysqlaio() {
 
     vlog "mybackup: task mysqlaio"
 
-    if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" -p"${SQL_PASSWD}" \
+    if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" --password="${SQL_PASSWD}" \
         --single-transaction --routines --triggers --all-databases > "$dumpfile"; then
         warn "Error: task mysqlaio"
     fi
