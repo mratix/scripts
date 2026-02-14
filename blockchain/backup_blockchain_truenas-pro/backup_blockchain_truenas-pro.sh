@@ -11,6 +11,7 @@ set -euo pipefail
 #
 # Supported blockchains and services:
 #   - bitcoind
+#    [bitcoind-knots - in testing, upcoming]
 #   - monerod
 #   - chia
 #
@@ -36,8 +37,8 @@ set -euo pipefail
 ########################################
 # Config defaults
 #
-LOGFILE="${LOGFILE:-/var/log/backup_restore_blockchain_truenas.log}"
-STATEFILE="${STATEFILE:-/var/log/backup_restore_blockchain_truenas.state}"
+LOGFILE="${LOGFILE:-/var/log/backup_blockchain.log}"
+STATEFILE="${STATEFILE:-/var/log/backup_blockchain.state}"
 RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude='/.zfs'
@@ -48,6 +49,7 @@ RSYNC_EXCLUDES=(
 )
 declare -A SERVICE_CT_MAP=(
   [bitcoind]="ix-bitcoind-bitcoind-1"
+  [bitcoind-knots]="ix-bitcoind-knots-bitcoind-1"
   [monerod]="ix-monerod-monerod-1"
   [chia]="ix-chia-chia-1"
 )
@@ -150,7 +152,7 @@ vlog "__load_config__"
             fi
 
             if ! bash -n "$cfg" 2>/dev/null; then
-                warn "Syntax error in config file, skipping: $cfg"
+                warn "Syntax error in config file, skipping entry: $cfg"
                 continue
             fi
 
@@ -179,7 +181,7 @@ vlog "__load_config_chain__"
             #todo: check validity/acceptance of read parameters
             load_config "$cfg"
         else
-            vlog "Config file not found, skipping: $cfg"
+            log "Config file not found, skipping: $cfg"
         fi
     done
 }
@@ -337,20 +339,21 @@ vlog "__prebackup__"
 
             local run_live_backup=true prompt_timeout="${CHIA_LIVE_BACKUP_PROMPT_TIMEOUT:-15}" keypress=""
             if [ -t 0 ]; then
-                show "Optional: press any key within ${prompt_timeout}s to skip Chia live DB backup (slow step)."
+                show "Optional: press any key within ${prompt_timeout}s to skip Chia live databse backup (slow step)."
                 if read -r -t "$prompt_timeout" -n 1 keypress 2>/dev/null; then
                     run_live_backup=false
-                    log "Skipping Chia live database backup (operator input detected)."
+                    log "Skipping Chiae database backup (operator input detected)."
                 else
-                    log "No operator input within ${prompt_timeout}s - continue with Chia live database backup."
+                    vlog "No operator input within ${prompt_timeout}s - continue with Chia database backup."
                 fi
             else
-                vlog "Headless run detected - continue with Chia live database backup."
+                vlog "Headless run detected - continue with Chia database backup."
             fi
 
             if [[ "$run_live_backup" == true ]]; then
                 log "Starting live database backup... (takes long, 30mins+)"
                 docker_exec "$SERVICE" chia db backup >/dev/null 2>&1 || warn "sqlite db backup failed"
+                vlog "__prebackup__ db done"
                 sync
 
                 local dbbakdir
@@ -360,8 +363,8 @@ vlog "__prebackup__"
                 elif [ -d "$DESTDIR/.chia/mainnet/db" ]; then dbbakdir=$DESTDIR/.chia/mainnet/db
                 elif [ -d "/mnt/tank/backups/databases/sqlite" ]; then dbbakdir="/mnt/tank/backups/databases/sqlite"
                 fi
-                log "Moving backup away to archive $dbbakdir"
-                mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move failed"
+                log "Moving backup away to archive $dbbakdir" # show filesize
+                mv $SRCDIR/.chia/mainnet/db/vacuumed_blockchain_v2_mainnet.sqlite $dbbakdir/$(date +%y%m%d%H%M)_vacuumed_blockchain_v2_mainnet.sqlite >/dev/null 2>&1 || warn "move db to archive failed"
             fi
         ;;
         *) return 1 ;;
@@ -411,10 +414,10 @@ merge_dirs() {
 vlog "__merge_dirs__"
 
 # take snapshot destination-dataset, not source
-local saved_pool="$POOL"
+local dest_pool="$POOL"
 POOL="tank"
 take_snapshot
-POOL="$saved_pool"
+POOL="$dest_pool"
 
 if [ "$DRY_RUN" = true ]; then
     log "Starting rsync dry-run merge ${RSYNC_OPTS[*]} ${SRCDIR}/ ${DESTDIR}/"
@@ -431,8 +434,8 @@ fi
 ########################################
 # Verify
 #
-verify_backup_restore() {
-vlog "__verify_backup_restore__"
+backup_restore_verify() {
+vlog "__backup_restore_verify__"
 
     [ -d "$SRCDIR" ]  || error "Source directory missing: $SRCDIR"
     [ -d "$DESTDIR" ] || error "Backup directory missing: $DESTDIR"
@@ -443,8 +446,8 @@ vlog "__verify_backup_restore__"
     src_size="$(du -sb "$SRCDIR"  | awk '{print $1}')"
     dst_size="$(du -sb "$DESTDIR" | awk '{print $1}')"
 
-    log "Source size: $src_size bytes"
-    log "Backup size: $dst_size bytes"
+    log "Source use size: $src_size bytes"
+    log "Backup use size: $dst_size bytes"
 
     if [[ "$src_size" -ne "$dst_size" ]]; then
         warn "Size mismatch detected (not fatal on ZFS)"
@@ -462,7 +465,7 @@ vlog "__verify_backup_restore__"
     local rsync_exit=$?
 
     if [[ "$rsync_exit" -ne 0 ]]; then
-        error "Verify rsync failed code=$rsync_exit"
+        error "Verify failed, code=$rsync_exit"
     fi
 
     grep -Ev '^(sending incremental file list|sent |total size|$)' "$verify_log" >"$verify_diffs" || true
@@ -473,7 +476,7 @@ vlog "__verify_backup_restore__"
             log "Verify diffs detected:"
             sed 's/^/  /' "$verify_diffs" | tee -a "$LOGFILE"
         fi
-        error "Verify found differences"
+        warn "Verify found differences"
     fi
 
      log "Verify successfully - no differences"
@@ -500,7 +503,7 @@ vlog "__service_stop_docker__"
     local ct="${SERVICE_CT_MAP[$SERVICE]:-}"
     [[ -n "$ct" ]] || return 0
 
-    log "Stopping service container: $ct"
+    log "Stopping container: $ct"
     if docker stop "$ct" >/dev/null 2>&1; then
         SERVICE_RUNNING=false
     else
@@ -519,7 +522,7 @@ vlog "__service_stop_graceful__"
         return 0
     fi
 
-    log "Attempting graceful stop of container: $ct"
+    log "Attempting graceful stop the container: $ct"
     case "$SERVICE" in
         bitcoind)
             docker_exec "$SERVICE" bitcoin-cli stop >/dev/null 2>&1 || warn "Graceful stop failed for $SERVICE"
@@ -589,7 +592,7 @@ restore_service() {
 rotate_logfile() {
 vlog "__rotate_logfile__"
     if [[ "$MODE" != "backup" ]]; then
-        # not backup mode, skip
+        # not backup mode, skip rotation
         return 0
     fi
 
@@ -623,8 +626,10 @@ vlog "__rotate_logfile__"
     BLOCK_HEIGHT="$(resolve_block_height "${BLOCK_HEIGHT:-}")"
     if [[ -n "${BLOCK_HEIGHT}" && "${BLOCK_HEIGHT}" -gt 111111 ]]; then
         height_stamp="_h${BLOCK_HEIGHT}"
+        vlog "Add height-stamp to rotate log file"
     else
         height_stamp=""
+        vlog "Don't add height-stamp to rotate log file"
     fi
 
     logfile_dir="$(dirname "$service_logfile")"
@@ -679,7 +684,7 @@ vlog "__resolve_paths__"
   DEST_BASE="$dest_root"
 }
 
-resolve_home_paths() {
+resolve_home_path() {
   local effective_user effective_home
 
   effective_user="${SUDO_USER:-$USER}"
@@ -704,8 +709,7 @@ docker_exec() {
 
 get_block_height() {
 vlog "__get_block_height__"
-    check_service_running || true
-
+  check_service_running || return 0
     if [[ "$SERVICE_RUNNING" == true ]]; then
         log "Get blockheight from running service"
         case "$SERVICE" in
@@ -752,6 +756,7 @@ vlog "__get_block_height__"
 normalize_block_height() {
     local value="$1"
     sed -nE 's/^([0-9]+)$/\1/p' <<<"${value}" | head -n1
+    vlog "normalize block height: $value"
 }
 
 resolve_block_height() {
@@ -793,7 +798,7 @@ resolve_block_height() {
         warn "No numeric blockheight could be resolved"
     fi
 
-    log "Resolved blockheight source=${source} raw='${raw_height:-${override_height:-}}' normalized='${normalized_height:-}'"
+    vlog "Resolved blockheight source=${source} raw='${raw_height:-${override_height:-}}' normalized='${normalized_height:-}'"
     printf '%s' "$normalized_height"
 }
 
@@ -830,7 +835,7 @@ get_service_data() {
     ct="${SERVICE_CT_MAP[$SERVICE]:-}" || return 1
     [[ -n "$ct" ]] || return 1
 
-    show "Getting short service summary..."
+    show "Getting service overview... Summary:"
     case "$SERVICE" in
         bitcoind)
             docker_exec "$SERVICE" bitcoin-cli -getinfo -color=auto \
@@ -897,13 +902,13 @@ telemetry_http() {
     curl -fsS -XPOST "$INFLUX_URL" \
         --data-binary \
         "backup,host=$THIS_HOST,service=$SERVICE \
-runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${METRIC_BLOCK_HEIGHT}"
+runtime=${METRIC_RUNTIME},exit=${METRIC_EXIT_CODE},block_height=${BLOCK_HEIGHT}"
 }
 
 telemetry_syslog() {
     /usr/bin/logger -t backup_restore_blockchain \
-      "service=$SERVICE mode=$MODE exit=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
-snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${METRIC_BLOCK_HEIGHT:-na}"
+      "service=$SERVICE mode=$MODE exitcode=$METRIC_EXIT_CODE runtime=${METRIC_RUNTIME}s \
+snapshots=${METRIC_SNAPSHOT_COUNT:-0} block_height=${BLOCK_HEIGHT:-0}"
 }
 
 telemetry_none() {
@@ -1091,6 +1096,7 @@ vlog "__parse_cli_args__"
             shift
         ;;
         --debug)
+            set -x
             DEBUG=true
             shift
         ;;
@@ -1207,6 +1213,8 @@ EOF
 vlog "__main__ start"
 $DEBUG && set -x # enable debug
 
+resolve_home_path
+
 START_TS=$(date +%s)
 THIS_HOST=$(hostname -s)
 show "Script started on Node $THIS_HOST"
@@ -1234,7 +1242,6 @@ if [[ -n "${CLI_SERVICE:-}" ]]; then
   SERVICE="$CLI_SERVICE"
 fi
 apply_cli_overrides
-resolve_home_paths
 
 # from here: normal operation, SERVICE mandatory
 vlog "__main_normal__"
@@ -1242,8 +1249,8 @@ if [[ -z "${SERVICE:-}" ]]; then
   error "SERVICE not set"
 fi
 
-STATEFILE="${SRCDIR}/$SERVICE.state" # temporary relocated, adapt to your own
-resolve_paths   # from here: SERVICE-folder to path attached
+STATEFILE="${SRCDIR}/$SERVICE.state" # temporary relocated
+resolve_paths   # from here SERVICE-folder attached to SRCDIR/DESTDIR
 prepare
 
 if $USE_USB; then
@@ -1266,19 +1273,19 @@ case "$MODE" in
         $SERVICE_STOP_BEFORE && service_stop
         rotate_logfile
         backup_restore_blockchain
-        $VERIFY && verify_backup_restore || EXIT_CODE=$?
+        $VERIFY && backup_restore_verify || EXIT_CODE=$?
         $SERVICE_START_AFTER && service_start
         $VERBOSE && list_snapshots
     ;;
     merge)
         service_stop
         merge_dirs
-        $VERIFY && verify_backup_restore || EXIT_CODE=$?
+        $VERIFY && backup_restore_verify || EXIT_CODE=$?
         #$SERVICE_START_AFTER && service_start
         $VERBOSE && list_snapshots
     ;;
     verify)
-        verify_backup_restore || EXIT_CODE=$?
+        backup_restore_verify || EXIT_CODE=$?
         $VERBOSE && list_snapshots
     ;;
     restore)
@@ -1294,7 +1301,7 @@ case "$MODE" in
         restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
         backup_restore_blockchain
         restore_tmp="$SRCDIR"; SRCDIR="$DESTDIR"; DESTDIR="$restore_tmp"
-        $VERIFY && verify_backup_restore || EXIT_CODE=$?
+        $VERIFY && backup_restore_verify || EXIT_CODE=$?
     ;;
 esac
 
@@ -1309,23 +1316,27 @@ RUNTIME=$((END_TS - START_TS))
 
 # Enhanced height parsing with Docker API fallback to improved log parsing
 get_block_height() {
+
+# Overrided settings: BLOCK_HEIGHT=879002 are up to here ignored -> return
+
+  check_service_running || return 0
+  if [[ "$SERVICE_RUNNING" == true ]]; then
     local parsed_height=0
     local service_logfile=""
 
     # Method 1: Try Docker API (most reliable if running)
-    if command -v docker >/dev/null 2>&1; then
-        case "$service" in
+        case "$SERVICE" in
             bitcoind)
-                parsed_height=$(docker exec "$service" bitcoin-cli getblockcount 2>/dev/null | grep -o '[0-9]\+' | head -n1)
-                vlog "Got Bitcoin height from Docker API: $parsed_height"
+                parsed_height=$(docker exec "$SERVICE" bitcoin-cli getblockcount 2>/dev/null | grep -o '[0-9]\+' | head -n1)
+                log "Got Bitcoin height from Docker API: $parsed_height"
                 ;;
             monerod)
-                parsed_height=$(docker exec "$service" monerod print_height 2>/dev/null | grep -o '[0-9]\+' | head -n1)
-                vlog "Got Monero height from Docker API: $parsed_height"
+                parsed_height=$(docker exec "$SERVICE" monerod print_height 2>/dev/null | grep -o '[0-9]\+' | head -n1)
+                log "Got Monero height from Docker API: $parsed_height"
                 ;;
             chia)
-                parsed_height=$(docker exec "$service" chia show --state 2>/dev/null | sed -nE 's/.*Height:[[:space:]]*([0-9]+).*/\1/p')
-                vlog "Got Chia height from Docker API: $parsed_height"
+                parsed_height=$(docker exec "$SERVICE" chia show --state 2>/dev/null | sed -nE 's/.*Height:[[:space:]]*([0-9]+).*/\1/p')
+                log "Got Chia height from Docker API: $parsed_height"
                 ;;
         esac
 
@@ -1333,14 +1344,17 @@ get_block_height() {
             echo "$parsed_height"
             return 0
         fi
-    fi
+  else
+        log "$SERVICE container not running"
+  fi
 
     # Method 2: Fallback to improved log parsing
-    vlog "Falling back to log parsing for $service"
+    if [ $SERVICE_RUNNING == false ]; then
+    log "Falling back to log parsing"
 
-    case "$service" in
+    case "$SERVICE" in
         bitcoind)
-            service_logfile="${srcdir}/debug.log"
+            service_logfile="${SRCDIR}/debug.log"
             if [[ -f "$service_logfile" ]]; then
                 # More robust pattern matching
                 local height_line=$(tail -n100 "$service_logfile" | grep -E "UpdateTip.*height=[0-9]+" | tail -1)
@@ -1351,7 +1365,7 @@ get_block_height() {
             fi
             ;;
         monerod)
-            service_logfile="${srcdir}/bitmonero.log"
+            service_logfile="${SRCDIR}/bitmonero.log"
             if [[ -f "$service_logfile" ]]; then
                 # More robust pattern for Monero
                 local height_line=$(tail -n100 "$service_logfile" | grep -E "Synced[[:space:]]+[0-9]+/[0-9]+" | tail -1)
@@ -1364,9 +1378,9 @@ get_block_height() {
         chia)
             # Check multiple log locations
             local chia_logs=(
-                "${srcdir}/.chia/mainnet/log/debug.log"
-                "${srcdir}/.chia/mainnet/log/wallet.log"
-                "${srcdir}/log/debug.log"
+                "${SRCDIR}/.chia/mainnet/log/debug.log"
+                "${SRCDIR}/.chia/mainnet/log/wallet.log"
+                "${SRCDIR}/log/debug.log"
             )
 
             for log_file in "${chia_logs[@]}"; do
@@ -1383,7 +1397,7 @@ get_block_height() {
             ;;
         electrs)
             # electrs doesn't have its own height, try bitcoind
-            local bitcoind_log="${srcdir}/../bitcoind/debug.log"
+            local bitcoind_log="${SRCDIR}/../bitcoind/debug.log"
             if [[ -f "$bitcoind_log" ]]; then
                 local height_line=$(tail -n100 "$bitcoind_log" | grep -E "UpdateTip.*height=[0-9]+" | tail -1)
                 if [[ "$height_line" =~ height=([0-9]+) ]]; then
@@ -1393,6 +1407,7 @@ get_block_height() {
             fi
             ;;
     esac
+    fi
 
     # Validate and return
     if [[ "$parsed_height" =~ ^[0-9]+$ ]] && [ "$parsed_height" -gt 0 ]; then
@@ -1411,23 +1426,23 @@ validate_height() {
 
     case "$service_name" in
         bitcoind)
-            # Bitcoin height should be 6-8 digits (current ~800k)
-            if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
-                error "Invalid Bitcoin height: $input_height (should be 6-8 digits)"
+            # Bitcoin height should be 6-7 digits (current ~800k)
+            if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
+                error "Invalid Bitcoin height: $input_height (should be 6-7 digits)"
                 return 1
             fi
             ;;
         monerod)
-            # Monero height should be 6-7 digits (current ~3M)
-            if ! [[ "$input_height" =~ ^[0-9]{6,7}$ ]]; then
-                error "Invalid Monero height: $input_height (should be 6-7 digits)"
+            # Monero height should be 7 digits (current ~3M)
+            if ! [[ "$input_height" =~ ^[0-9]{7}$ ]]; then
+                error "Invalid Monero height: $input_height (should be 7 digits)"
                 return 1
             fi
             ;;
         chia)
             # Chia height can vary, use reasonable range
-            if ! [[ "$input_height" =~ ^[0-9]{1,8}$ ]]; then
-                error "Invalid Chia height: $input_height (should be 1-8 digits)"
+            if ! [[ "$input_height" =~ ^[0-9]{6,8}$ ]]; then
+                error "Invalid Chia height: $input_height (should be 6-8 digits)"
                 return 1
             fi
             ;;
@@ -1448,16 +1463,5 @@ exit "$EXIT_CODE"
 #
 # End
 ########################################
-
 # ------------------------------------------------------------------------
-# todos
-
-
-# ------------------------------------------------------------------------
-# errors
-- chia startup delay, recheck
-root@9e35f18816ce:/chia-blockchain# chia show --state
-Error: Connection error: ClientConnectorError: Cannot connect to host 127.0.0.1:8555 ssl:<ssl.SSLContext object at 0x7fae916e0560> [Connect call failed ('127.0.0.1', 8555)]
-Check if full node rpc is running at 8555
-This is normal if full node is still starting up
 
