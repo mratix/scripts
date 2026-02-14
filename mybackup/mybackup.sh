@@ -264,7 +264,7 @@ sync_data() {
 # Backup with Borg
 backup_borg() {
     vlog "mybackup: task borg"
-    if ! env BORG_PASSCOMMAND="cat $HOME/.borg-passphrase" sudo "$HOME/scripts/borgbackup.sh"; then
+    if ! env BORG_PASSCOMMAND="cat $HOME/.borg-passphrase" sudo -E "$HOME/scripts/borgbackup.sh"; then
         warn "Error: task borg"
     fi
     vlog "mybackup: task borg Ended at $(date)"
