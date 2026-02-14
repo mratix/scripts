@@ -149,6 +149,9 @@ backup_windows() {
     local WINSRC_P3=""
     local WINSRC_P4=""
     local WINSRC_P7=""
+    local old_mountp="$NAS_MOUNTP"
+    local profiles_mountp=""
+    local profiles_dest=""
 
     if [ "$(hostname -s)" = "hped800g2" ]; then
         vlog "mybackup: task windows"
@@ -165,10 +168,18 @@ backup_windows() {
         [ ! -d "$WINSRC_P4" ] && sudo mkdir -p "$WINSRC_P4"
         [ ! -d "$WINSRC_P7" ] && sudo mkdir -p "$WINSRC_P7"
 
-        sudo mount /dev/sda1 "$WINSRC_P1"
-        sudo mount /dev/sda3 "$WINSRC_P3"
-        sudo mount /dev/sda4 "$WINSRC_P4"
-        sudo mount /dev/sda7 "$WINSRC_P7"
+        if ! mountpoint -q "$WINSRC_P1"; then
+            sudo mount /dev/sda1 "$WINSRC_P1"
+        fi
+        if ! mountpoint -q "$WINSRC_P3"; then
+            sudo mount /dev/sda3 "$WINSRC_P3"
+        fi
+        if ! mountpoint -q "$WINSRC_P4"; then
+            sudo mount /dev/sda4 "$WINSRC_P4"
+        fi
+        if ! mountpoint -q "$WINSRC_P7"; then
+            sudo mount /dev/sda7 "$WINSRC_P7"
+        fi
 
         mkdir -p "${destbakpath}/sda4_boot"
         if ! rsync -auv --delete --exclude=lost+found "${WINSRC_P4}/" "${destbakpath}/sda4_boot/"; then
@@ -199,16 +210,17 @@ backup_windows() {
 
         # Backup windows profiles
         vlog "mybackup: task winprofiles"
-        NAS_MOUNTP="/mnt/$NAS_HOSTNAME/profiles"
+        profiles_mountp="/mnt/$NAS_HOSTNAME/profiles"
+        profiles_dest="$profiles_mountp"
+        NAS_MOUNTP="$profiles_mountp"
         mount_nas
-        destbakpath="$NAS_MOUNTP"
 
-        if [ -d "${destbakpath}/Users/mratix/Desktop" ]; then
+        if [ -d "${profiles_dest}/Users/mratix/Desktop" ]; then
             if ! rsync -rtuv \
                 --exclude=node_modules --exclude=cache --exclude=temp --exclude=tmp \
                 --exclude='*Temp*' --exclude='*Cache*' --exclude=Logs --exclude="\$Recycle.Bin" \
                 --exclude='*.tmp' --exclude='*.log' --exclude='*.log.*' --exclude=NTUSER.DAT \
-                "${WINSRC_P3}/Users/" "${destbakpath}/Users/"; then
+                "${WINSRC_P3}/Users/" "${profiles_dest}/Users/"; then
                 warn "Error: task windows profiles"
             fi
             vlog "mybackup: task winprofiles Ended at $(date)"
@@ -217,7 +229,14 @@ backup_windows() {
         fi
 
         sync
-        sudo umount /mnt/localhost/sda*
+        for mp in "$WINSRC_P1" "$WINSRC_P3" "$WINSRC_P4" "$WINSRC_P7"; do
+            if mountpoint -q "$mp"; then
+                if ! sudo umount "$mp"; then
+                    warn "Error: task windows umount $mp"
+                fi
+            fi
+        done
+        NAS_MOUNTP="$old_mountp"
     else
         vlog "mybackup: task windows The partition layout is only defined for hped800g2. Abort."
     fi
