@@ -266,14 +266,26 @@ backup_blockchain() {
 # Backup websites
 backup_www() {
     local web_user="mratix"
+    local src_dir="${SRCDIR2}/html/"
+    local dst_dir="/volume2/storage/www/html/"
+    local -a rsync_opts=(
+        -avzsh
+        --no-o
+        --no-g
+        --no-perms
+        --omit-dir-times
+        --delete-during
+        --exclude=.bin
+        --exclude=sess_*
+    )
 
     # web_user=rsync # remount to become permissions on /volume2/storage/www/
-    # todo umstellen auf mount, or try sudo -u www-data <cmd>
     if [ "$(hostname -s)" = "$SQL_HOSTNAME" ]; then
-        if ! rsync -avzsh --no-o --no-g --no-perms --omit-dir-times --delete-during \
-            --exclude=.bin --exclude=sess_* \
-            "${SRCDIR2}/html/" "$web_user@$NAS_HOST:/volume2/storage/www/html/"; then
-            warn "Error: task www"
+        if ! sudo -u www-data rsync "${rsync_opts[@]}" "$src_dir" "$web_user@$NAS_HOST:$dst_dir"; then
+            vlog "mybackup: task www retry as $(id -un)"
+            if ! rsync "${rsync_opts[@]}" "$src_dir" "$web_user@$NAS_HOST:$dst_dir"; then
+                warn "Error: task www"
+            fi
         fi
         vlog "mybackup: task www Ended at $(date)"
     else
