@@ -87,8 +87,7 @@ for infile in *.mp4; do
     echo "Title : $title"
 
     shopt -s nocasematch
-    title_lc="${title,,}"
-	if [[ "$title_lc" =~ (^|[[:space:]])audio[[:space:]]+only($|[[:space:]]) ]]; then
+	if [[ "$title" =~ (^|[^[:alnum:]])audio[[:space:]]+only([^[:alnum:]]|$) ]]; then
         conv_mp3
     fi # convert to mp3 and delete videofile
 
