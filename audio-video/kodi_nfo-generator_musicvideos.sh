@@ -56,19 +56,28 @@ fi
 
 
 conv_mp3(){
-# convert audio only videofile to mp3
+# convert audio only videofile
 echo ${infile}
 echo "Artist: $artist"
 echo "Title : $title"
-echo ${outfile}
-	mp3_out="${outfile%.*}.mp3"
-	ffmpeg -hide_banner -y -i "$outfile" -vn -c:a libmp3lame -q:a 0 "$mp3_out"
-	if [[ $? != 0 ]]; then
-		echo "Error during conv_mp3 extraction job."
-		return 1
-	fi
-	echo "Videofile converted to $mp3_out"
-	return 0
+echo "Output base: ${output_base}"
+
+    audio_mode="${AUDIO_ONLY_MODE:-mp3}"
+    if [ "$audio_mode" = "copy" ]; then
+        audio_out="${output_base}.m4a"
+        ffmpeg -hide_banner -y -i "$infile" -vn -c:a copy "$audio_out"
+    else
+        audio_out="${output_base}.mp3"
+        ffmpeg -hide_banner -y -i "$infile" -vn -c:a libmp3lame -q:a 0 "$audio_out"
+    fi
+
+    if [[ $? != 0 ]]; then
+        echo "Error during conv_mp3 extraction job."
+        return 1
+    fi
+
+    echo "Videofile converted to $audio_out"
+    return 0
 }
 
 
@@ -77,12 +86,13 @@ for infile in *.mp4; do
     echo "Input : ${infile}"
     outfile="$infile"                               # keep original filename unless explicit rename is enabled
     echo "Rename: ${outfile}"
-    nfofile="${infile%.*}.nfo"
     artist=${infile%% - *}; title=${infile#* - }	# extract artist and title from filename
     artist="$(trim_and_fold_spaces "$artist")"      # clean whitespaces
     title="$(trim_and_fold_spaces "$title")"        # clean whitespaces
     title=${title##*/}                              # cut extension from title
     title=${title%.mp4}                             # cut extension from title
+    output_base="$(trim_and_fold_spaces "$artist - $title")"
+    nfofile="${output_base}.nfo"
     echo "Artist: $artist"
     echo "Title : $title"
 
