@@ -143,11 +143,15 @@ for infile in *.mp4; do
                 IGNORECASE = 1
 
                 while (match(title_tail, /\([^)]*\)/)) {
-                    paren = substr(title_tail, RSTART + 1, RLENGTH - 2)
+                    outer_rstart = RSTART
+                    outer_rlength = RLENGTH
+
+                    paren = substr(title_tail, outer_rstart + 1, outer_rlength - 2)
                     if (match(paren, /(^|[[:space:]])(feat\.?|ft\.?)[[:space:]]+/)) {
                         artists_raw = artists_raw "," substr(paren, RSTART + RLENGTH)
                     }
-                    title_tail = substr(title_tail, RSTART + RLENGTH)
+
+                    title_tail = substr(title_tail, outer_rstart + outer_rlength)
                 }
 
                 gsub(/[[:space:]]+/, " ", artists_raw)
