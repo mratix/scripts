@@ -28,6 +28,57 @@ PRUNE_OPTS=(
     --keep-monthly=2
 )
 
+ROOTFS_EXCLUDES=(
+    --exclude-caches
+    --exclude /dev
+    --exclude /home
+    --exclude /lost+found
+    --exclude /mnt
+    --exclude /proc
+    --exclude /root
+    --exclude /run
+    --exclude /sys
+    --exclude /tmp
+    --exclude /var/cache
+    --exclude /var/crash
+    --exclude /var/lib/docker
+    --exclude /var/lib/mysql
+    --exclude /var/lock
+    --exclude /var/run
+    --exclude /var/metrics
+    --exclude /var/tmp
+    --exclude /var/www
+    --exclude '.cache/*'
+    --exclude '*.dummy'
+    --exclude '*.log.{3-9}.gz'
+    --exclude '*.pyc'
+    --exclude '.nobackup/*'
+    --exclude '.recycle'
+    --exclude '.snapshots/*'
+    --exclude '*.tmp'
+)
+
+WWW_EXCLUDES=(
+    --exclude .bin
+    --exclude 'sess_*'
+)
+
+HOME_EXCLUDES=(
+    --exclude-caches
+    --exclude lost+found
+    --exclude '*/.cache'
+    --exclude cache
+    --exclude '.deletedByTMM'
+    --exclude '*.dummy'
+    --exclude '*/.mozilla/firefox/Crash Reports'
+    --exclude '*/.mozilla/firefox/*/datareporting'
+    --exclude .recycle
+    --exclude Thumbnails
+    --exclude '.Trash-100?'
+    --exclude '*/cronas_*'
+    --exclude '*/cronas?_*'
+)
+
 
 # --- logger
 show() { echo "$*"; }
@@ -49,33 +100,7 @@ SECONDS=0
 view ""
 view "Starte Sicherung von /"
 borg create "${BORG_OPTS[@]}" \
-    --exclude-caches \
-    --exclude /dev \
-    --exclude /home \
-    --exclude /lost+found \
-    --exclude /mnt \
-    --exclude /proc \
-    --exclude /root \
-    --exclude /run \
-    --exclude /sys \
-    --exclude /tmp \
-    --exclude /var/cache \
-    --exclude /var/crash \
-    --exclude /var/lib/docker \
-    --exclude /var/lib/mysql \
-    --exclude /var/lock \
-    --exclude /var/run \
-    --exclude /var/metrics \
-    --exclude /var/tmp \
-    --exclude /var/www \
-    --exclude '.cache/*' \
-    --exclude '*.dummy' \
-    --exclude '*.log.{3-9}.gz' \
-    --exclude '*.pyc' \
-    --exclude '.nobackup/*' \
-    --exclude '.recycle' \
-    --exclude '.snapshots/*' \
-    --exclude '*.tmp' \
+    "${ROOTFS_EXCLUDES[@]}" \
     "${REPO_LOCATION}::{hostname}-{now:%Y%m%d%H%M}" /
 sync
 
@@ -84,8 +109,7 @@ if [ -d "/var/www" ]; then
     view ""
     view "Starte Sicherung von /var/www"
     borg create "${BORG_OPTS[@]}" \
-        --exclude .bin \
-        --exclude 'sess_*' \
+        "${WWW_EXCLUDES[@]}" \
         "${REPO_LOCATION}::{hostname}-www-{now:%Y%m%d%H%M}" /var/www
     sync
 fi
@@ -94,19 +118,7 @@ fi
 view ""
 view "Starte Sicherung von /home /root"
 borg create "${BORG_OPTS[@]}" \
-    --exclude-caches \
-    --exclude lost+found \
-    --exclude '*/.cache' \
-    --exclude cache \
-    --exclude '.deletedByTMM' \
-    --exclude '*.dummy' \
-    --exclude '*/.mozilla/firefox/Crash Reports' \
-    --exclude '*/.mozilla/firefox/*/datareporting' \
-    --exclude .recycle \
-    --exclude Thumbnails \
-    --exclude '.Trash-100?' \
-    --exclude '*/cronas_*' \
-    --exclude '*/cronas?_*' \
+    "${HOME_EXCLUDES[@]}" \
     "${REPO_LOCATION}::{hostname}-home-{now:%Y%m%d%H%M}" /home /root
 sync
 log "Sicherung(en) abgeschlossen in $SECONDS sek."
