@@ -142,107 +142,6 @@ sync_data() {
 }
 
 
-# Backup windows file system with rsync
-backup_windows() {
-    local WINSRC_MP=""
-    local WINSRC_P1=""
-    local WINSRC_P3=""
-    local WINSRC_P4=""
-    local WINSRC_P7=""
-    local old_mountp="$NAS_MOUNTP"
-    local profiles_mountp=""
-    local profiles_dest=""
-
-    if [ "$(hostname -s)" = "hped800g2" ]; then
-        vlog "mybackup: task windows"
-
-        WINSRC_MP="/mnt/localhost"
-        # dualboot, custom partition layout
-        WINSRC_P1="${WINSRC_MP}/sda1"
-        WINSRC_P3="${WINSRC_MP}/sda3"
-        WINSRC_P4="${WINSRC_MP}/sda4"
-        WINSRC_P7="${WINSRC_MP}/sda7"
-
-        [ ! -d "$WINSRC_P1" ] && sudo mkdir -p "$WINSRC_P1"
-        [ ! -d "$WINSRC_P3" ] && sudo mkdir -p "$WINSRC_P3"
-        [ ! -d "$WINSRC_P4" ] && sudo mkdir -p "$WINSRC_P4"
-        [ ! -d "$WINSRC_P7" ] && sudo mkdir -p "$WINSRC_P7"
-
-        if ! mountpoint -q "$WINSRC_P1"; then
-            sudo mount /dev/sda1 "$WINSRC_P1"
-        fi
-        if ! mountpoint -q "$WINSRC_P3"; then
-            sudo mount /dev/sda3 "$WINSRC_P3"
-        fi
-        if ! mountpoint -q "$WINSRC_P4"; then
-            sudo mount /dev/sda4 "$WINSRC_P4"
-        fi
-        if ! mountpoint -q "$WINSRC_P7"; then
-            sudo mount /dev/sda7 "$WINSRC_P7"
-        fi
-
-        mkdir -p "${destbakpath}/sda4_boot"
-        if ! rsync -auv --delete --exclude=lost+found "${WINSRC_P4}/" "${destbakpath}/sda4_boot/"; then
-            warn "Error: task windows sda4"
-        fi
-
-        mkdir -p "${destbakpath}/sda1_efi"
-        if ! rsync -auv "${WINSRC_P1}/" "${destbakpath}/sda1_efi/"; then
-            warn "Error: task windows sda1"
-        fi
-
-        mkdir -p "${destbakpath}/sda7_diag"
-        if ! rsync -auv "${WINSRC_P7}/" "${destbakpath}/sda7_diag/"; then
-            warn "Error: task windows sda7"
-        fi
-
-        mkdir -p "${destbakpath}/sda3_win10"
-        if ! rsync -rtuv \
-            --exclude=Users \
-            --exclude=node_modules --exclude=cache --exclude=temp --exclude=tmp \
-            --exclude='*Temp*' --exclude='*Cache*' --exclude=Logs --exclude="\$Recycle.Bin" \
-            --exclude='*.tmp' --exclude='*.log' --exclude='*.log.*' --exclude=NTUSER.DAT \
-            "${WINSRC_P3}/" "${destbakpath}/sda3_win10/"; then
-            warn "Error: task windows sda3"
-        fi
-
-        vlog "mybackup: task windows Ended at $(date)"
-
-        # Backup windows profiles
-        vlog "mybackup: task winprofiles"
-        profiles_mountp="/mnt/$NAS_HOSTNAME/profiles"
-        profiles_dest="$profiles_mountp"
-        NAS_MOUNTP="$profiles_mountp"
-        mount_nas
-
-        if [ -d "${profiles_dest}/Users/mratix/Desktop" ]; then
-            if ! rsync -rtuv \
-                --exclude=node_modules --exclude=cache --exclude=temp --exclude=tmp \
-                --exclude='*Temp*' --exclude='*Cache*' --exclude=Logs --exclude="\$Recycle.Bin" \
-                --exclude='*.tmp' --exclude='*.log' --exclude='*.log.*' --exclude=NTUSER.DAT \
-                "${WINSRC_P3}/Users/" "${profiles_dest}/Users/"; then
-                warn "Error: task windows profiles"
-            fi
-            vlog "mybackup: task winprofiles Ended at $(date)"
-        else
-            error "Share profiles not mounted or unwritable."
-        fi
-
-        sync
-        for mp in "$WINSRC_P1" "$WINSRC_P3" "$WINSRC_P4" "$WINSRC_P7"; do
-            if mountpoint -q "$mp"; then
-                if ! sudo umount "$mp"; then
-                    warn "Error: task windows umount $mp"
-                fi
-            fi
-        done
-        NAS_MOUNTP="$old_mountp"
-    else
-        vlog "mybackup: task windows The partition layout is only defined for hped800g2. Abort."
-    fi
-}
-
-
 # Backup with Borg
 backup_borg() {
     vlog "mybackup: task borg"
@@ -294,7 +193,6 @@ backup_www() {
         --exclude=sess_*
     )
 
-    # web_user=rsync # remount to become permissions on /volume2/storage/www/
     if [ "$(hostname -s)" = "$SQL_HOSTNAME" ]; then
         log "mybackup: task www -> rsync Ziel: $web_user@$NAS_HOST:$dst_dir (lokal als $(id -un), key: $ssh_key)"
         if ! rsync "${rsync_opts[@]}" "$src_dir" "$web_user@$NAS_HOST:$dst_dir"; then
@@ -427,11 +325,6 @@ case "$cmd" in
         sync_data
         umount_nas
         ;;
-    windows)
-        mount_nas
-        backup_windows
-        umount_nas
-        ;;
     borg)
         mount_nas
         backup_mysqlaio
@@ -460,7 +353,7 @@ case "$cmd" in
         ;;
     *)
         echo "mybackup.sh version: $version"
-        echo "Usage: $0 {borg|tar|mysql|web|data|blockchain|windows|all|mount|umount}"
+        echo "Usage: $0 {borg|tar|mysql|web|data|blockchain|all|mount|umount}"
         exit 1
         ;;
 esac
