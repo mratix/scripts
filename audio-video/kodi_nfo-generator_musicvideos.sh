@@ -3,7 +3,7 @@
 # Kodi nfo-generator for musicvideos
 # skeleton: https://kodi.wiki/view/NFO_files/Music_videos
 # Author: mratix, 1644259+mratix@users.noreply.github.com
-version="250101, by Mr.AtiX"
+version="260214, by Mr.AtiX + Codex"
 # ============================================================
 
 set -euo pipefail
@@ -50,8 +50,8 @@ fi
 conv_mp3(){
 # convert audio only videofile to mp3
 echo ${infile}
-echo "artist: $artist"
-echo "title : $title"
+echo "Artist: $artist"
+echo "Title : $title"
 echo ${outfile}
 	# ...
 	[[ $? != 0 ]] && echo "Error during conv_mp3 extraction job." || echo "Videofile converted or Audiofile exists."
@@ -61,23 +61,23 @@ return $?
 
 for infile in *.mp4; do
 	# prepare
-    echo "input : ${infile}"
+    echo "Input : ${infile}"
     outfile="$infile"                               # keep original filename unless explicit rename is enabled
-    echo "rename: ${outfile}"
+    echo "Rename: ${outfile}"
     nfofile="${infile%.*}.nfo"
     artist=${infile%% - *}; title=${infile#* - }	# extract artist and title from filename
     artist="$(trim_and_fold_spaces "$artist")"      # clean whitespaces
     title="$(trim_and_fold_spaces "$title")"        # clean whitespaces
     title=${title##*/}                              # cut extension from title
     title=${title%.mp4}                             # cut extension from title
-    echo "artist: $artist"
-    echo "title : $title"
+    echo "Artist: $artist"
+    echo "Title : $title"
 
     shopt -s nocasematch
 	if [[ "$title" =~ (^|[[:space:]])audio[[:space:]]+only($|[[:space:]]) ]]; then conv_mp3; fi # convert to mp3 and delete videofile
 
     # construct the .nfo-file
-    echo "create: ${nfofile}"
+    echo "Create: ${nfofile}"
     {
         echo '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
         echo "<!-- created $(date +"%Y-%m-%d %H:%M:%S") with $(basename "$0") -->"
@@ -155,3 +155,7 @@ for infile in *.mp4; do
     echo "</musicvideo>" >> "$nfofile"                  # close top level parent tag
     echo "-------"
 done
+
+exit
+
+# todo check filename for "A|audio only" -> call conv_mp3

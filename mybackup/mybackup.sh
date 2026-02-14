@@ -1,12 +1,14 @@
 #!/bin/bash
 
-# Script to backup MySQL databases and directories to a NAS server
+# Script to backup MySQL databases and local data to a NAS server
 # Author: mratix, 1644259+mratix@users.noreply.github.com
 # Updated: 2026-02-14 (maintained by mratix, refined with Codex)
 version="260214, by Mr.AtiX + Codex"
+# ============================================================
 
 set -euo pipefail
 IFS=$'\n\t'
+export LANG=de_DE.UTF-8
 
 NAS_HOST=192.168.178.20
 NAS_HOSTNAME=cronas
@@ -18,9 +20,9 @@ SQL_PASSWD=
 SQL_HOST="192.168.178.66"
 SQL_HOSTNAME="crodebhassio"
 
-sqlbakpath="${NAS_MOUNTP}/databases/mysql"
-sqllocalpath="$HOME/Dokumente/machines/${SQL_HOSTNAME}"
-destbakpath="${NAS_MOUNTP}/pools/rsync/$(hostname -s)"
+sqlbakpath="${NAS_MOUNTP}/databases/mysql"              # sql backups archive
+sqllocalpath="$HOME/Dokumente/machines/${SQL_HOSTNAME}" # local backup storage
+destbakpath="${NAS_MOUNTP}/pools/rsync/$(hostname -s)"  # tar backups archive
 
 SRCDIR1='/etc'
 SRCDIR2='/var/www'

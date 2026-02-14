@@ -2,6 +2,7 @@
 
 # Updated: 2026-02-14 (maintained by mratix, refined with Codex)
 version="260214, by Mr.AtiX + Codex"
+# ============================================================
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -34,6 +35,7 @@ ROOTFS_EXCLUDES=(
     --exclude /dev
     --exclude /home
     --exclude /lost+found
+    --exclude /media
     --exclude /mnt
     --exclude /proc
     --exclude /root
@@ -61,6 +63,9 @@ ROOTFS_EXCLUDES=(
 
 WWW_EXCLUDES=(
     --exclude .bin
+    --exclude lost+found
+    --exclude '.nobackup/*'
+    --exclude .recycle
     --exclude 'sess_*'
 )
 
@@ -73,6 +78,7 @@ HOME_EXCLUDES=(
     --exclude '*.dummy'
     --exclude '*/.mozilla/firefox/Crash Reports'
     --exclude '*/.mozilla/firefox/*/datareporting'
+    --exclude '.nobackup/*'
     --exclude .recycle
     --exclude Thumbnails
     --exclude '.Trash-100?'
@@ -99,7 +105,7 @@ log "Repository $BORG_REPO gefunden."
 # backup, first job
 SECONDS=0
 view ""
-view "Starte Sicherung von /"
+log "Starte Sicherung von /"
 borg create "${BORG_OPTS[@]}" \
     "${ROOTFS_EXCLUDES[@]}" \
     "${REPO_LOCATION}::{hostname}-{now:%Y%m%d%H%M}" /
@@ -108,7 +114,7 @@ sync
 # backup, second job
 if [ -d "/var/www" ]; then
     view ""
-    view "Starte Sicherung von /var/www"
+    log "Starte Sicherung von /var/www"
     borg create "${BORG_OPTS[@]}" \
         "${WWW_EXCLUDES[@]}" \
         "${REPO_LOCATION}::{hostname}-www-{now:%Y%m%d%H%M}" /var/www
@@ -117,7 +123,7 @@ fi
 
 # backup, third job
 view ""
-view "Starte Sicherung von /home /root"
+log "Starte Sicherung von /home /root"
 borg create "${BORG_OPTS[@]}" \
     "${HOME_EXCLUDES[@]}" \
     "${REPO_LOCATION}::{hostname}-home-{now:%Y%m%d%H%M}" /home /root
@@ -125,7 +131,7 @@ sync
 log "Sicherung(en) abgeschlossen in $SECONDS sek."
 
 view ""
-view "Starte Repository-Bereinigung: Abgelaufene Sicherungen werden entfernt..."
+log "Starte Bereinigung: Abgelaufene Sicherungen werden entfernt..."
 borg prune -v --list "${PRUNE_OPTS[@]}" "$REPO_LOCATION"
 sync
 
