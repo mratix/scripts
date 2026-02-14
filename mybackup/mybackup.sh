@@ -43,6 +43,24 @@ error() { log "ERROR: $*" >&2; exit 1; }
 # Backup file system, create tar-archive
 backup_tar() {
     local destfile=""
+    local split_limit_bytes="${TAR_SPLIT_LIMIT_BYTES:-1073741824}" # 1 GiB
+
+    split_archive_if_large() {
+        local archive="$1"
+        local size_bytes=""
+
+        size_bytes="$(stat -c %s "$archive")"
+        if [ "$size_bytes" -le "$split_limit_bytes" ]; then
+            return 0
+        fi
+
+        if split -b "$split_limit_bytes" -d -a 4 "$archive" "${archive}.part-"; then
+            rm -f "$archive"
+            vlog "mybackup: task tar split archive $archive into ${archive}.part-*"
+        else
+            warn "Error: task tar split $archive"
+        fi
+    }
 
     vlog "mybackup: task tar"
     mkdir -p "${destbakpath}/${today}"
@@ -52,6 +70,8 @@ backup_tar() {
     destfile="${destbakpath}/${today}/rootfs-$(date +"%y%m%d%H%M").tar.gz"
     if ! tar --exclude="*/proc/*" --exclude="*/dev/*" "${COMMON_TAR_EXCLUDES[@]}" -zcvf "$destfile" "$SRCDIR1"; then
         warn "Error: task tar1 $SRCDIR1"
+    else
+        split_archive_if_large "$destfile"
     fi
 
     # task 2
@@ -59,6 +79,8 @@ backup_tar() {
     destfile="${destbakpath}/${today}/www-$(date +"%y%m%d%H%M").tar.gz"
     if ! tar "${COMMON_TAR_EXCLUDES[@]}" -zcvf "$destfile" "$SRCDIR2"; then
         warn "Error: task tar2 $SRCDIR2"
+    else
+        split_archive_if_large "$destfile"
     fi
 
     # task 3
@@ -76,6 +98,8 @@ backup_tar() {
         -zcvf "$destfile" \
         /root /home; then
         warn "Error: task tar3 /root /home"
+    else
+        split_archive_if_large "$destfile"
     fi
 
     vlog "mybackup: task tar Ended at $(date)"
