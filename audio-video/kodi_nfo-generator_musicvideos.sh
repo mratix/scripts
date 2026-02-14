@@ -1,6 +1,6 @@
 #!/bin/bash
-
-# Kodi nfo-generator for musicvideos
+# ============================================================
+# Kodi Info generator for musicvideos
 # skeleton: https://kodi.wiki/view/NFO_files/Music_videos
 # Author: mratix, 1644259+mratix@users.noreply.github.com
 version="260214, by Mr.AtiX + Codex"
@@ -194,4 +194,3 @@ done
 
 exit
 
-# todo check filename for "A|audio only" -> call conv_mp3
