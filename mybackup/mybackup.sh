@@ -265,11 +265,26 @@ backup_blockchain() {
 
 # Backup websites
 backup_www() {
-    local web_user="mratix"
+    local web_user="${WWW_RSYNC_USER:-rsync}"
+    local ssh_key=""
     local src_dir="${SRCDIR2}/html/"
     local dst_dir="/volume2/storage/www/html/"
+
+    if [ -n "${WWW_RSYNC_SSH_KEY:-}" ]; then
+        ssh_key="$WWW_RSYNC_SSH_KEY"
+    elif [ -r "$HOME/.ssh/id_ed25519_backup_www" ]; then
+        ssh_key="$HOME/.ssh/id_ed25519_backup_www"
+    elif [ -r "/home/rsync/.ssh/id_ed25519_backup_www" ]; then
+        ssh_key="/home/rsync/.ssh/id_ed25519_backup_www"
+    elif [ -r "/home/mratix/.ssh/id_ed25519_backup_www" ]; then
+        ssh_key="/home/mratix/.ssh/id_ed25519_backup_www"
+    else
+        ssh_key="$HOME/.ssh/id_ed25519_backup_www"
+    fi
+
     local -a rsync_opts=(
         -avzsh
+        -e "ssh -i $ssh_key -o BatchMode=yes"
         --no-o
         --no-g
         --no-perms
@@ -281,11 +296,9 @@ backup_www() {
 
     # web_user=rsync # remount to become permissions on /volume2/storage/www/
     if [ "$(hostname -s)" = "$SQL_HOSTNAME" ]; then
-        if ! sudo -u www-data rsync "${rsync_opts[@]}" "$src_dir" "$web_user@$NAS_HOST:$dst_dir"; then
-            vlog "mybackup: task www retry as $(id -un)"
-            if ! rsync "${rsync_opts[@]}" "$src_dir" "$web_user@$NAS_HOST:$dst_dir"; then
-                warn "Error: task www"
-            fi
+        log "mybackup: task www -> rsync Ziel: $web_user@$NAS_HOST:$dst_dir (lokal als $(id -un), key: $ssh_key)"
+        if ! rsync "${rsync_opts[@]}" "$src_dir" "$web_user@$NAS_HOST:$dst_dir"; then
+            warn "Error: task www"
         fi
         vlog "mybackup: task www Ended at $(date)"
     else
