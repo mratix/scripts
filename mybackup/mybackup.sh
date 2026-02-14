@@ -39,6 +39,85 @@ vlog() { [[ "${VERBOSE:-false}" == "true" ]] || return 0; log "> $*"; }
 warn() { log "WARNING: $*"; }
 error() { log "ERROR: $*" >&2; exit 1; }
 
+rotate_local_sql_dumps() {
+    local db="$1"
+    local keep_count=3
+    local idx=0
+    local file=""
+    local full_path=""
+    local latest_file=""
+    local latest_link=""
+    local -a snapshot_files=()
+
+    mapfile -t snapshot_files < <(
+        find "$sqllocalpath" -maxdepth 1 -type f \
+            \( -name "*_${db}.sql" -o -name "*_${db}.sql.gz" \) \
+            -printf '%f\n' | sort -r
+    )
+
+    [ "${#snapshot_files[@]}" -eq 0 ] && return 0
+
+    latest_file="${snapshot_files[0]}"
+    if [[ "$latest_file" == *.gz ]]; then
+        if gunzip -f "$sqllocalpath/$latest_file"; then
+            latest_file="${latest_file%.gz}"
+            snapshot_files[0]="$latest_file"
+        else
+            warn "Error: task mysqldump gunzip latest $latest_file"
+        fi
+    fi
+
+    for ((idx = 1; idx < ${#snapshot_files[@]}; idx++)); do
+        file="${snapshot_files[$idx]}"
+        full_path="$sqllocalpath/$file"
+
+        if [ "$idx" -lt "$keep_count" ]; then
+            if [[ "$file" == *.sql ]]; then
+                if ! gzip -f "$full_path"; then
+                    warn "Error: task mysqldump gzip $file"
+                fi
+            fi
+        else
+            if ! rm -f "$full_path"; then
+                warn "Error: task mysqldump remove old $file"
+            fi
+        fi
+    done
+
+    latest_link="${sqllocalpath}/${db}_last.sql"
+    if ! ln -sfn "$latest_file" "$latest_link"; then
+        warn "Error: task mysqldump link latest for $db"
+    fi
+}
+
+rotate_all_local_sql_dumps() {
+    local db=""
+    local -a dbs=()
+
+    [ -d "$sqllocalpath" ] || return 0
+
+    mapfile -t dbs < <(
+        find "$sqllocalpath" -maxdepth 1 -type f \
+            \( -name "*.sql" -o -name "*.sql.gz" \) \
+            -printf '%f\n' \
+            | awk '
+                {
+                    file=$0
+                    sub(/\.sql(\.gz)?$/, "", file)
+                    split(file, parts, "_")
+                    if (parts[1] ~ /^[0-9]{6}$/) {
+                        sub(/^[0-9]{6}_/, "", file)
+                        print file
+                    }
+                }
+            ' | sort -u
+    )
+
+    for db in "${dbs[@]}"; do
+        rotate_local_sql_dumps "$db"
+    done
+}
+
 
 # Backup file system, create tar-archive
 backup_tar() {
@@ -232,11 +311,10 @@ backup_www() {
 
 # Mount NAS share
 mount_nas() {
-    [ ! -d "$NAS_MOUNTP" ] && sudo mkdir -p "$NAS_MOUNTP"
+    [ ! -d "$NAS_MOUNTP" ] && mkdir -p "$NAS_MOUNTP"
 
     if ! mount | grep -qs -- "$NAS_MOUNTP"; then
-        # sudo mount -t cifs //$NAS_HOST/backups -o user=$NAS_USER "$NAS_MOUNTP"
-        sudo mount "$NAS_MOUNTP"
+        mount "$NAS_MOUNTP"
     fi
 }
 
@@ -245,7 +323,7 @@ mount_nas() {
 umount_nas() {
     sync
     if mount | grep -qs -- "$NAS_MOUNTP"; then
-        sudo umount "$NAS_MOUNTP"
+        umount "$NAS_MOUNTP"
     fi
 }
 
@@ -254,11 +332,12 @@ umount_nas() {
 backup_mysql() {
     local DBS=""
     local db=""
-    local linkname=""
     local dumpfile=""
+    local local_dumpfile=""
+    local nas_dumpfile=""
 
     vlog "mybackup: task mysqldump"
-    DBS="$(mysql -h "$SQL_HOST" -u "$SQL_USER" --password="${SQL_PASSWD}" -Bse 'show databases')"
+    DBS="$(mysql -h "$SQL_HOST" -u "$SQL_USER" -Bse 'show databases')"
 
     mkdir -p "$sqlbakpath" "$sqllocalpath"
 
@@ -273,20 +352,22 @@ backup_mysql() {
 
         dumpfile="/tmp/${db}.sql"
 
-        if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" --password="${SQL_PASSWD}" -B "$db" > "$dumpfile"; then
+        if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" -B "$db" > "$dumpfile"; then
             warn "Error: task mysqldump for $db"
             continue
         fi
 
         # check filesize (don't overwrite last good dump with an empty file)
         if [ -s "$dumpfile" ]; then
-            cp -u "$dumpfile" "${sqlbakpath}/${db}_$(date +"%y%m%d%H%M").sql"
-            mv -u "$dumpfile" "${sqllocalpath}/$(date +%y%m%d)_${db}.sql"
+            nas_dumpfile="${sqlbakpath}/${db}_$(date +"%y%m%d%H%M").sql"
+            local_dumpfile="${sqllocalpath}/$(date +%y%m%d)_${db}.sql"
 
-            # link dump as latest
-            linkname="${sqllocalpath}/${db}_last.sql"
-            [ -L "$linkname" ] && rm "$linkname"
-            ln -s "${sqllocalpath}/$(date +%y%m%d)_${db}.sql" "$linkname"
+            if cp -u "$dumpfile" "$nas_dumpfile" && mv -u "$dumpfile" "$local_dumpfile"; then
+                rotate_local_sql_dumps "$db"
+            else
+                warn "Error: task mysqldump store for $db"
+                rm -f "$dumpfile"
+            fi
         else
             warn "Error: dump for $db does not exist or is zero size."
             rm -f "$dumpfile"
@@ -301,10 +382,12 @@ backup_mysql() {
 backup_mysqlaio() {
     local db="all_databases"
     local dumpfile="/tmp/${db}.sql"
+    local local_dumpfile=""
+    local nas_dumpfile=""
 
     vlog "mybackup: task mysqlaio"
 
-    if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" --password="${SQL_PASSWD}" \
+    if ! mysqldump -h "$SQL_HOST" -u "$SQL_USER" \
         --single-transaction --routines --triggers --all-databases > "$dumpfile"; then
         warn "Error: task mysqlaio"
     fi
@@ -312,9 +395,16 @@ backup_mysqlaio() {
     # check filesize (don't copy an empty file and destroy last good one)
     if [ -s "$dumpfile" ]; then
         [ ! -d "$sqlbakpath" ] && mkdir -p "$sqlbakpath"
-        cp -u "$dumpfile" "${sqlbakpath}/${db}_$(date +"%y%m%d%H%M").sql"
         [ ! -d "$sqllocalpath" ] && mkdir -p "$sqllocalpath"
-        mv -u "$dumpfile" "${sqllocalpath}/$(date +%y%m%d)_${db}.sql"
+        nas_dumpfile="${sqlbakpath}/${db}_$(date +"%y%m%d%H%M").sql"
+        local_dumpfile="${sqllocalpath}/$(date +%y%m%d)_${db}.sql"
+
+        if cp -u "$dumpfile" "$nas_dumpfile" && mv -u "$dumpfile" "$local_dumpfile"; then
+            rotate_local_sql_dumps "$db"
+        else
+            warn "Error: task mysqlaio store"
+            rm -f "$dumpfile"
+        fi
     else
         warn "Error: dump does not exist or is zero length."
         rm -f "$dumpfile"
@@ -341,6 +431,7 @@ case "$cmd" in
         ;;
     tar)
         mount_nas
+        rotate_all_local_sql_dumps
         backup_tar
         backup_mysqlaio
         umount_nas
