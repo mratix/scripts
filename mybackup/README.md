@@ -9,6 +9,8 @@ Kurzanleitung fuer `mybackup.sh` mit Fokus auf headless Betrieb.
 - `tar`: erstellt Tar-Backups und splittet grosse `.tar.gz` in 1 GiB Teile
 - `borg`: startet Borg-Backup (separates Script)
 
+Siehe auch: `mybackup/BORG_INSTALL_GUIDE_DE.md` fuer das komplette Borg-Setup (Server, SSH-Haertung, Restore).
+
 ## Voraussetzungen
 
 - NAS-Share `backups` ist in `/etc/fstab` eingetragen
@@ -140,6 +142,13 @@ cat archive.tar.gz.part-* > archive.tar.gz
 ~/scripts/mybackup.sh www
 ~/scripts/mybackup.sh mysql
 ~/scripts/mybackup.sh tar
+~/scripts/mybackup.sh borg
+```
+
+Gesamtlauf:
+
+```bash
+~/scripts/mybackup.sh all
 ```
 
 ## Troubleshooting
