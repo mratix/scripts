@@ -1,12 +1,19 @@
 #!/bin/bash
 
+set -euo pipefail
+shopt -s nullglob
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Please run as root (e.g. sudo $0)."
+    exit 1
+fi
+
 echo "zfs Disk Performance Benchmark"
-sudo -i
 
 echo "Flush buffers or disk caches (read from the disk, not the buffer)"
 #echo 3 | sudo tee /proc/sys/vm/drop_caches
 echo 3 > /proc/sys/vm/drop_caches
-for disk in /dev/sd?; do; hdparm -Ttv $disk; done
+for disk in /dev/sd?; do hdparm -Ttv "$disk"; done
 
 #/dev/sda:
 # multcount     =  8 (on)
@@ -62,7 +69,7 @@ for disk in /dev/sd?; do; hdparm -Ttv $disk; done
 # Timing buffered disk reads: 344 MB in  3.01 seconds = 114.35 MB/sec
 
 echo "Get drive write-caching flag (0/1)"
-for disk in /dev/sd?; do; hdparm -W $disk; done
+for disk in /dev/sd?; do hdparm -W "$disk"; done
 
 #enabled write-caching
 #	sda	WD-WCC4J6ZC5EDN	931.51 GiB	tank
@@ -133,4 +140,3 @@ dd if=/dev/zero of=/mnt/tank/testfile bs=512 count=1000 oflag=dsync
 #512000 bytes (512 kB, 500 KiB) copied, 69.0377 s, 7.4 kB/s
 
 rm -v /mnt/tank/testfile
-

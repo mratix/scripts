@@ -2,7 +2,7 @@
 
 # Define variables
 SOURCEDRIVE="$1"
-SCRIPTROOT="$(dirname """$(realpath "$0")""")"
+SCRIPTROOT="$(dirname "$(realpath "$0")")"
 #CACHE="$(awk '/^cache/{print $1}' "$SCRIPTROOT/settings.cfg" | cut -d '=' -f2)"
 CACHE=-1
 #DEBUG="$(awk '/^debug/{print $1}' "$SCRIPTROOT/settings.cfg" | cut -d '=' -f2)"
@@ -20,15 +20,15 @@ if [ -z "$SOURCEDRIVE" ]; then
 	exit 1
 fi
 setcd -i "$SOURCEDRIVE" | grep --quiet 'Disc found'
-if [ ! $? ]; then
+if [ $? -ne 0 ]; then
         echo "[ERROR] $SOURCEDRIVE: Source Drive is not available."
         exit 1
 fi
 
 # Construct the arguments
-if [[ $OUTPUTDIR == ""\~*"" ]]; then
-	if [[ $OUTPUTDIR == ""\~/*"" ]]; then
-		OUTPUTDIR=$(echo "$(eval echo ~"${SUDO_USER:-$USER}")/${OUTPUTDIR:2}" | sed 's:/*$::')
+if [[ "$OUTPUTDIR" == "~"* ]]; then
+	if [[ "$OUTPUTDIR" == "~/"* ]]; then
+		OUTPUTDIR="$(echo "$(eval echo ~"${SUDO_USER:-$USER}")/${OUTPUTDIR:2}" | sed 's:/*$::')"
 	else
 		OUTPUTDIR="$(eval echo ~"${SUDO_USER:-$USER}")"
 	fi
@@ -47,14 +47,9 @@ else
 	echo "[Warning] Log directory under $SCRIPTROOT/logs is missing. Trying to create it..."
 	mkdir -p "$SCRIPTROOT/logs"
 	LOGDIR="$SCRIPTROOT/logs"
-	exit 1
 fi
-if [ -z "$CACHE" ]; then
-	if [ "$CACHE" = "-1" ]; then
-		:
-	elif [[ "$CACHE" =~ ^[0-9]+$ ]]; then
-		ARGS="--cache=$CACHE"
-	fi
+if [[ "$CACHE" =~ ^[0-9]+$ ]] && [ "$CACHE" != "-1" ]; then
+	ARGS="--cache=$CACHE"
 fi
 if [ "$DEBUG" = "true" ]; then
 	ARGS="$ARGS --debug"
@@ -80,12 +75,12 @@ DISKTITLERAW=${DISKTITLERAW// /_}
 NOWDATE=$(date +"%F_%H-%M-%S")
 DISKTITLE="${DISKTITLERAW}_-_$NOWDATE"
 
-mkdir "$OUTPUTDIR/$DISKTITLE"
+mkdir -p "$OUTPUTDIR/$DISKTITLE"
 makemkvcon mkv --messages="${LOGDIR}/${NOWDATE}_$DISKTITLERAW.log" --noscan --robot $ARGS disc:"$SOURCEMMKVDRIVE" all "${OUTPUTDIR}/${DISKTITLE}"
-if [ $? -le 1 ]; then
-	echo "[Info] $SOURCEDRIVE: Ripping finished (exit code $?), ejecting"
+rc=$?
+if [ "$rc" -le 1 ]; then
+	echo "[Info] $SOURCEDRIVE: Ripping finished (exit code $rc), ejecting"
 else
-	echo "[ERROR] $SOURCEDRIVE: RIPPING FAILED (exit code $?), ejecting. Please check the log ${LOGDIR}/${NOWDATE}_${DISKTITLERAW}.log"
+	echo "[ERROR] $SOURCEDRIVE: RIPPING FAILED (exit code $rc), ejecting. Please check the log ${LOGDIR}/${NOWDATE}_${DISKTITLERAW}.log"
 fi
 eject "$SOURCEDRIVE"
-

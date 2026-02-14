@@ -32,30 +32,31 @@ pruning="--keep-within=1d --keep-daily=7 --keep-weekly=4 --keep-monthly=2"
 
 # --- logger
 show() { echo "$*"; }
+view() { show "$*"; }
 log() { echo "$(date +'%Y-%m-%d %H:%M:%S') $*"; }
 #vlog() { [[ "${VERBOSE:-false}" == true ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') $*" >&2 || true; }
-vlog() { $VERBOSE || return 0; log "> $*"; }
+vlog() { [[ "${VERBOSE:-false}" == true ]] || return 0; log "> $*"; }
 warn() { log "WARNING: $*"; }
 error() { log "ERROR: $*" >&2; exit 1; }
 
 # check rights
-if [ $(id -u) -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ]; then
   warn "$0 muss als root oder mit sudo -E ausgeführt werden."
   view "Ende."
   exit 1
 fi
 
 # mount the backup-share
-if grep -qs $NAS_MOUNTP /proc/mounts; then
+if grep -qs -- "$NAS_MOUNTP" /proc/mounts; then
     log "Freigabe backups ist eingehängt."
     is_mounted=true
 else
     view "NAS wird geweckt..."
-    mount $NAS_MOUNTP
+    mount "$NAS_MOUNTP"
     read -r -p "(Wait 15 seconds or press any key to continue immediately)" -t 15 -n 1 -s
 fi
 # recheck mounted backup-share
-if [ -d $BORG_PATH ]; then
+if [ -d "$BORG_PATH" ]; then
     is_mounted=true
 else
     warn "Freigabe backups wurde nicht eingehängt. Exit."
@@ -63,12 +64,12 @@ else
 fi
 
 # init a new borg-repo if absent
-if [ $is_mounted ] && [ ! -d $REPO_LOCATION ]; then
+if [[ "$is_mounted" == true ]] && [ ! -d "$REPO_LOCATION" ]; then
   log "Neues Host-Repository für $BORG_REPO wird unter $BORG_PATH angelegt."
   view "Bitte neues Passwort für die Verschlüsselung $BORG_ENC setzen:"
-    borg init --encryption=$BORG_ENC $REPO_LOCATION
+    borg init --encryption="$BORG_ENC" "$REPO_LOCATION"
     #borg key export
-elif [ $is_mounted ] && [ ! -w $REPO_LOCATION ]; then
+elif [[ "$is_mounted" == true ]] && [ ! -w "$REPO_LOCATION" ]; then
   warn "Repository unter $REPO_LOCATION ist nicht beschreibbar."
   view "Bitte Rechte prüfen. Exit."
   exit 1
@@ -116,7 +117,7 @@ sync
 
 # backup, second job
 SRCDIR="/var/www"
-if [ -d $SRCDIR ]; then
+if [ -d "$SRCDIR" ]; then
 view ""
 view "Starte Sicherung von $SRCDIR"
 borg create $BORG_OPTS \
@@ -159,7 +160,6 @@ sync
 #borg --max-lock-wait 3600
 #borg break-lock -v --show-rc $REPO_LOCATION
 
-[ $is_mounted ] && umount $NAS_MOUNTP
+[[ "$is_mounted" == true ]] && umount "$NAS_MOUNTP"
 view ""
 view "End."
-
