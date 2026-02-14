@@ -1,6 +1,7 @@
 #!/bin/bash
 
-version="250101, by Mr.AtiX"
+# Updated: 2026-02-14 (maintained by mratix, refined with Codex)
+version="260214, by Mr.AtiX + Codex"
 
 set -euo pipefail
 IFS=$'\n\t'

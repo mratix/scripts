@@ -1,5 +1,7 @@
 # BorgBackup Install- und Betriebsleitfaden
 
+Stand: 2026-02-14 (mratix + Codex)
+
 ## Ziel
 
 Diese Anleitung beschreibt ein robustes BorgBackup-Setup fuer Linux-Systeme:

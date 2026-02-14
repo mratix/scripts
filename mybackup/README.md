@@ -1,5 +1,7 @@
 # mybackup Guide
 
+Stand: 2026-02-14 (mratix + Codex)
+
 Kurzanleitung fuer `mybackup.sh` mit Fokus auf headless Betrieb.
 
 ## Was das Script tut
