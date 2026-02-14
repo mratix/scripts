@@ -24,11 +24,11 @@ trim_and_fold_spaces() {
 
 xml_escape() {
     local s="$1"
-    s=${s//&/\&amp;}
-    s=${s//</\&lt;}
-    s=${s//>/\&gt;}
-    s=${s//\"/\&quot;}
-    s=${s//\'/\&apos;}
+    s=${s//&/&amp;}
+    s=${s//</&lt;}
+    s=${s//>/&gt;}
+    s=${s//\"/&quot;}
+    s=${s//\'/&apos;}
     printf '%s' "$s"
 }
 
@@ -37,12 +37,20 @@ conv_mkv(){
 if [ -z "$infile" ]; then
     for f in *.mkv; do
 		ffmpeg -hide_banner -i "$f" -c copy "${f%.mkv}.mp4"
-		[[ $? != 0 ]] && echo "Error during conv_mkv loop." || echo "Videofile converted to ${f%.mkv}.mp4"
+		if [[ $? != 0 ]]; then
+			echo "Error during conv_mkv loop."
+		else
+			echo "Videofile converted to ${f%.mkv}.mp4"
+		fi
 	done
 else
 		outfile=${infile%.mkv}.mp4
 		ffmpeg -hide_banner -i "${infile}" -c copy "${outfile}"
-		[[ $? != 0 ]] && echo "Error during conv_mkv job." || return $?
+		if [[ $? != 0 ]]; then
+			echo "Error during conv_mkv job."
+			return 1
+		fi
+		return 0
 fi
 }
 
@@ -53,9 +61,14 @@ echo ${infile}
 echo "Artist: $artist"
 echo "Title : $title"
 echo ${outfile}
-	# ...
-	[[ $? != 0 ]] && echo "Error during conv_mp3 extraction job." || echo "Videofile converted or Audiofile exists."
-return $?
+	mp3_out="${outfile%.*}.mp3"
+	ffmpeg -hide_banner -y -i "$outfile" -vn -c:a libmp3lame -q:a 0 "$mp3_out"
+	if [[ $? != 0 ]]; then
+		echo "Error during conv_mp3 extraction job."
+		return 1
+	fi
+	echo "Videofile converted to $mp3_out"
+	return 0
 }
 
 
@@ -74,13 +87,17 @@ for infile in *.mp4; do
     echo "Title : $title"
 
     shopt -s nocasematch
-	if [[ "$title" =~ (^|[[:space:]])audio[[:space:]]+only($|[[:space:]]) ]]; then conv_mp3; fi # convert to mp3 and delete videofile
+    title_lc="${title,,}"
+	if [[ "$title_lc" =~ (^|[[:space:]])audio[[:space:]]+only($|[[:space:]]) ]]; then
+        conv_mp3
+    fi # convert to mp3 and delete videofile
 
     # construct the .nfo-file
     echo "Create: ${nfofile}"
+    created_on="$(date '+%Y-%m-%d %H:%M:%S')"
     {
         echo '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
-        echo "<!-- created $(date +"%Y-%m-%d %H:%M:%S") with $(basename "$0") -->"
+        echo "<!-- created ${created_on} with $(basename "$0") -->"
         echo "<musicvideo>"
     } > "$nfofile"
     if [ -z "$title" ]; then
@@ -95,14 +112,20 @@ for infile in *.mp4; do
 	    echo "  <album></album>"                         # Name of album the song appears on
 	    echo "  <plot></plot>"                           # Review / information of music video
 	    echo "  <runtime></runtime>"                     # Minutes only. If ommitted, Kodi will add runtime upon scanning
-#	echo         title=(echo -n) $title"  <thumb aspect="thumb" preview=""></thumb>"  # can multiple, Path to TV Show and Season artwork
+#	echo "  <thumb aspect=\"thumb\" preview=\"\"></thumb>" >> "$nfofile"  # can multiple, Path to artwork
 #	echo "  <playcount></playcount>" >> ${nfofile}      # Setting this to 1 or greater will mark the Music Video
 #   echo "  <lastplayed></lastplayed>" >> ${nfofile}    # Date last played, Format as yyyy-mm-dd
 	    echo "  <genre></genre>"                         # can multiple, Genre
         echo "  <tag>musicvideo</tag>"                  # can multiple, Video tags
-        [[ "$title" =~ (^|[[:space:]])live($|[[:space:]]) ]] && echo "  <tag>live</tag>"
-        [[ "$title" =~ lyric ]] && echo "  <tag>lyrics</tag>"
-        [[ "$title" =~ (^|[[:space:]])remix($|[[:space:]]) ]] && echo "  <tag>remix</tag>"
+        if [[ "$title" =~ (^|[[:space:]])live($|[[:space:]]) ]]; then
+            echo "  <tag>live</tag>"
+        fi
+        if [[ "$title" =~ lyric ]]; then
+            echo "  <tag>lyrics</tag>"
+        fi
+        if [[ "$title" =~ (^|[[:space:]])remix($|[[:space:]]) ]]; then
+            echo "  <tag>remix</tag>"
+        fi
     } >> "$nfofile"
 #   echo "  <director></director>" >> ${nfofile}        # can multiple, Director of the music video
 #   echo "  <premiered></premiered>" >> ${nfofile}      # Release date, Format as yyyy-mm-dd
