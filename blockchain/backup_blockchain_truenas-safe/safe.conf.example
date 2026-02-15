@@ -1,8 +1,9 @@
-#!/bin/bash
 # ============================================================
-# Configuration file for blockchain backup script
+# Example configuration file for blockchain backup script
 # backup_blockchain_truenas-safe.sh
 # ============================================================
+
+ENABLED=true
 
 # --- Network Configuration ---
 NAS_USER="your_username"
@@ -10,41 +11,24 @@ NAS_HOST="your_nas_ip_address"
 NAS_HOSTNAME="your_nashostname"
 NAS_SHARE="your_nassharename"
 
-# --- USB Configuration ---
-USB_DEVICE="/dev/sdf1"
-USB_MOUNT_POINT="/mnt/usb"
-
-# --- Default Paths ---
-MOUNT_BASE="/mnt"
-DEFAULT_MOUNTPATH="/mnt/\${NAS_HOSTNAME}/\${NAS_SHARE}"
-
 # --- ZFS Pool/Dataset (required) ---
 ZFS_POOL="ssd"
 ZFS_DATASET="blockchain"
 
-# --- Security Settings ---
-ALLOWED_MOUNT_PATHS="/mnt /home /var"
-FORBIDDEN_PATHS="/ /bin /sbin /usr /etc /boot /sys /proc /dev /media"
+# --- Default Paths ---
+DEFAULT_MOUNTPATH="/mnt/\${NAS_HOSTNAME}/\${NAS_SHARE}"
+SRCDIR=""
+DESTDIR=""
 
-# --- Rsync Options ---
-declare -A RSYNC_CONFIGS
-RSYNC_CONFIGS[bitcoind]="-avihH -P --fsync --mkpath --stats --delete"
-RSYNC_CONFIGS[monerod]="-a -P --numeric-ids --delete --info=progress2 --no-compress"
-RSYNC_CONFIGS[chia]="-avz -P --update --stats --delete --info=progress2"
-RSYNC_CONFIGS[restore]="-avz -P --append-verify --info=progress2"
+# --- USB Configuration ---
+use_usb=false
+USB_DEVICE="/dev/sdf1"
+USB_MOUNTP="/mnt/usb"
+
+# --- Other Configuration ---
+RSYNC_OPTS="-aLx --numeric-ids --mkpath --delete --stats --info=progress2"
 
 # --- Logging Configuration ---
 LOG_FORMAT="%Y-%m-%d %H:%M:%S"
-LOG_LEVELS="DEBUG VERBOSE INFO WARN ERROR"
+LOG_LEVELS="INFO VERBOSE WARN ERROR DEBUG"
 
-# --- Timeout Settings ---
-NETWORK_TIMEOUT=5
-MOUNT_TIMEOUT=10
-SYNC_TIMEOUT=30
-
-# --- File Extensions to Monitor ---
-EXECUTABLE_EXTENSIONS=".sh .exe .bat .com .cmd"
-
-# --- Backup Validation ---
-ENABLE_INTEGRITY_CHECK=true
-BACKUP_RETENTION_DAYS=30
