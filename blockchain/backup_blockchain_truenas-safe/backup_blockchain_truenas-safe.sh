@@ -26,6 +26,7 @@ NAS_USER=""
 NAS_HOST=""
 NAS_HOSTNAME=""
 NAS_SHARE=""
+THIS_HOST=$(hostname -s)
 
 # Load external configuration - see safe.conf.example
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
@@ -48,7 +49,6 @@ NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE
 SERVICE=""
 RESTORE=false
 is_mounted=false
-use_usb=false
 FORCE=false
 VERBOSE=false
 HEIGHT=0
@@ -59,10 +59,13 @@ SRCDIR=""
 DESTDIR=""
 folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
 USBDEV="/dev/sdf1"
+USB_MOUNTP=/mnt/usb
+use_usb=false
 RSYNC_OPTS=""
 full_mode=false
 TARGET_SERVICE=""
 TARGET_HOST=""
+
 
 # --- logger
 show() { echo "$*"; }
@@ -147,25 +150,25 @@ fi
 
 # --- mount usb device
 mount_usb(){
-    [ ! -d "/mnt/usb" ] && mkdir -p /mnt/usb
-    if mount | grep -q /mnt/usb; then
+    [ ! -d "$USB_MOUNTP" ] && mkdir -p $USB_MOUNTP
+    if mount | grep -q $USB_MOUNTP; then
         log "USB already mounted"
-    elif mount "$USBDEV" /mnt/usb; then
+    elif mount "$USBDEV" $USB_MOUNTP; then
         log "USB mounted successfully"
     else
-        error "Failed to mount USB device $USBDEV"
+        error "Failed to mount $USBDEV to $USB_MOUNTP"
     fi
     sleep 2
-    if [ ! -f "$NAS_MOUNTP/usb.dummy" ]; then
-        error "Mounted disk is not valid and or not prepared as backup storage!"
+    if [ ! -f "$USB_MOUNTP/usb.dummy" ]; then
+        error "Mounted disk is not valid and/or not prepared as backup storage!"
     fi
-    if [ ! -w "$NAS_MOUNTP/" ]; then
-        warn "Error: Disk $NAS_MOUNTP is NOT writable!"
-        error "usb $NAS_MOUNTP write permissions deny"
+    if [ ! -w "$USB_MOUNTP/" ]; then
+        warn "Error: Disk $USB_MOUNTP is NOT writable!"
+        error "$USB_MOUNTP write permissions deny"
     fi
     is_mounted=true
     show "USB disk is (now) mounted and valid backup storage."
-    log "usb $NAS_MOUNTP mounted, valid"
+    log "$USB_MOUNTP mounted, valid"
 }
 
 
@@ -175,13 +178,6 @@ unmount_dest(){
         df -h | grep $NAS_SHARE
         mount | grep $NAS_MOUNTP >/dev/null
         [ $? -eq 0 ] && umount $NAS_MOUNTP || is_mounted=false
-}
-
-
-# --- evaluate environment
-prepare(){
-show "Script started at $(date +%H:%M:%S)"
-log "script $version started"
 }
 
 # Enhanced prepare function for single SERVICE or full mode
@@ -211,6 +207,7 @@ prepare_single_service() {
     vlog "SERVICE=$SERVICE, POOL=$POOL, DATASET=$DATASET"
 }
 
+# --- evaluate environment
 prepare() {
 show "Script started at $(date +%H:%M:%S)"
 log "script started"
@@ -299,6 +296,7 @@ latest_manifest() {
 
 # --- compare src-dest times
 compare() {
+    local srcsynctime destsynctime
     if [ "$SERVICE" = "bitcoind" ]; then
         srcfile=$(latest_manifest "$SRCDIR")
         destfile=$(latest_manifest "$DESTDIR")
@@ -557,9 +555,9 @@ fi
 case "$SERVICE" in
     btc)
         cp -u "anchors.dat banlist.json debug*.log fee_estimates.dat mempool.dat peers.dat" ${DESTDIR}/ 2>/dev/null || true
-        cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
-        cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
-        folder[1]="blocks"; folder[2]="chainstate":
+        cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$THIS_HOST
+        cp -u settings.json ${DESTDIR}/settings.json.$THIS_HOST
+        folder[1]="blocks"; folder[2]="chainstate"
         # coinstats EOL, up to Core v1.0.30 #
         #if [[ -f "${SRCDIR}/indexes/coinstats/db/CURRENT" || \
               -f "${SRCDIR}/indexes/coinstatsindex/db/CURRENT" ]]; then
