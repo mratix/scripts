@@ -47,6 +47,7 @@ today=$(date +%y%m%d)
 now=$(date +%y%m%d%H%M%S)
 NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE
 SERVICE=""
+TARGET_SERVICE=$SERVICE # only for full node backup (all services)
 RESTORE=false
 is_mounted=false
 FORCE=false
@@ -57,14 +58,12 @@ POOL=""
 DATASET=""
 SRCDIR=""
 DESTDIR=""
-folder[1]="" folder[2]="" folder[3]="" folder[4]="" folder[5]=""
+srcsynctime=""
+destsynctime=""
 USBDEV="/dev/sdf1"
 USB_MOUNTP=/mnt/usb
 use_usb=false
 RSYNC_OPTS=""
-full_mode=false
-TARGET_SERVICE=""
-TARGET_HOST=""
 
 
 # --- logger
@@ -180,10 +179,9 @@ unmount_dest(){
         [ $? -eq 0 ] && umount $NAS_MOUNTP || is_mounted=false
 }
 
-# Enhanced prepare function for single SERVICE or full mode
+# Enhanced prepare, for single SERVICE
 prepare_single_service() {
     local blockchain_type="${1:-$TARGET_SERVICE}"
-    # local hostname_override="${TARGET_HOST:-$(hostname -s)}"  # TODO: for gold/enterprise
 
     # Map blockchain type to SERVICE if needed
     case "$blockchain_type" in
@@ -217,11 +215,6 @@ if [[ "$VERBOSE" == true ]]; then
     RSYNC_OPTS="-aLx --numeric-ids --mkpath --delete --stats --info=progress2"
 else
     RSYNC_OPTS="-avLhx --numeric-ids --mkpath --delete --stats --info=progress2"
-fi
-
-if [[ "$full_mode" == true ]]; then
-    show "=== FULL MODE: Backup all configured SERVICEs ==="
-    return
 fi
 
 prepare_single_service
@@ -296,7 +289,6 @@ latest_manifest() {
 
 # --- compare src-dest times
 compare() {
-    local srcsynctime destsynctime
     if [ "$SERVICE" = "bitcoind" ]; then
         srcfile=$(latest_manifest "$SRCDIR")
         destfile=$(latest_manifest "$DESTDIR")
@@ -525,6 +517,14 @@ if [ "$is_zfs" ]; then
 fi
 }
 
+# --- Folders Array leeren
+init_folders() {
+    folder[1]=""
+    folder[2]=""
+    folder[3]=""
+    folder[4]=""
+    folder[5]=""
+}
 
 # --- main rsync job
 backup_blockchain(){
@@ -533,6 +533,7 @@ cd $SRCDIR
 show ""
 show "Main task started at $(date +%H:%M:%S)"
 vlog "backup_blockchain__pre"
+init_folders    # Array leeren
 
 # Ensure both timestamps are valid numbers
 if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
@@ -594,6 +595,7 @@ while [ "${folder[i]}" != "" ]; do
     sync
     ((i++))
 done
+init_folders    # Array leeren
 show "------------------------------------------------------------"
 log "end task backup main"
 }
@@ -627,26 +629,23 @@ usage() {
     show "COMMANDS:"
     show "  btc|xmr|xch               Backup specific blockchain"
     show "  bitcoind|monerod|chia|electrs|mempool   Backup specific service"
-    show "  all|--full                Backup all configured services"
     show "  restore                   Restore blockchain data"
     show "  mount                     Mount backup destination"
     show "  umount                    Unmount backup destination"
     show ""
     show "OPTIONS:"
+    show "  -s,  --service SERVICE    Target specific service"
     show "  -bh, --height N           Set blockchain height (numeric)"
     show "  -f, --force               Force operation (bypass safety checks)"
     show "  -v, --verbose             Enable verbose output"
     show "  -x, --debug               Enable shell debugging"
     show "      --usb                 Use USB device instead of network"
-    show "      --service SERVICE     Target specific service"
-    show "      --host HOSTNAME       Target specific node (for --full)"
     show "  -h, --help                Show this help message"
     show ""
     show "EXAMPLES:"
     show "  $0 btc -bh 936125         # Backup Bitcoin at height 936125"
     show "  $0 --service monerod -v   # Backup Monero with verbose output"
     show "  $0 restore --force        # Force restore operation"
-    show "  $0 --full --host hpms1    # Backup all services on node hpms1"
     show ""
 }
 
@@ -692,15 +691,10 @@ while [[ $# -gt 0 ]]; do
             HEIGHT="$2"
             shift 2
             ;;
-        --service)
+        -s|--service)
             [[ -z "${2:-}" ]] && { error "--SERVICE requires a value"; }
             SERVICE="$2"
             TARGET_SERVICE="$2"
-            shift 2
-            ;;
-        --host)
-            [[ -z "${2:-}" ]] && { error "--host requires a value"; }
-            TARGET_HOST="$2"
             shift 2
             ;;
         # Boolean flags
@@ -788,133 +782,6 @@ elif [[ "$RESTORE" == true ]]; then
     postbackup
 fi
 
-# --- full mode implementation
-backup_all_services() {
-show "=== BACKUP ALL CONFIGURED SERVICES ==="
-
-    # Get all available SERVICE configurations
-    local all_services=()
-    local hostname_target="${TARGET_HOST:-$(hostname -s)}"
-
-    for config_key in "${!SERVICE_CONFIGS[@]}"; do
-        # Extract hostname from config key (hostname_SERVICE)
-        local config_host="${config_key%_*}"
-        if [[ "$config_host" == "$hostname_target" ]]; then
-            local service_config="${SERVICE_CONFIGS[$config_key]}"
-            IFS=':' read -r svc_name pool_name <<< "$service_config"
-            all_services+=("$svc_name:$pool_name")
-        fi
-    done
-
-    if [[ ${#all_services[@]} -eq 0 ]]; then
-        show "No services configured for host: $hostname_target"
-        exit 1
-    fi
-
-    show "Found services to backup:"
-    for service_entry in "${all_services[@]}"; do
-        IFS=':' read -r svc_name pool_name <<< "$service_entry"
-        show "  - $svc_name (POOL: $pool_name)"
-    done
-
-    show "------------------------------------------------------------"
-    log "Starting full backup of all services..."
-
-    # Backup each SERVICE
-    for service_entry in "${all_services[@]}"; do
-        IFS=':' read -r svc_name pool_name <<< "$service_entry"
-
-        show ""
-        show "=== Backing up service $svc_name ==="
-
-        # Set global variables for this SERVICE
-        SERVICE="$svc_name"
-        POOL="$pool_name"
-        DATASET="$POOL/blockchain"
-        is_zfs=true
-
-        # Reset height for each SERVICE
-        HEIGHT=0
-
-        # Set paths for this SERVICE
-        NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE
-        SRCDIR=/mnt/$DATASET/$SERVICE
-        DESTDIR=$NAS_MOUNTP/$SERVICE
-        [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$DATASET/$SERVICE
-        [[ "$use_usb" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
-
-        # Run backup workflow for this SERVICE
-        prestop
-        prebackup
-        snapshot
-        backup_blockchain_single
-        postbackup
-
-        log "Service $svc_name backup completed."
-        show "------------------------------------------------------------"
-    done
-
-    show "=== ALL SERVICES BACKUP COMPLETED ==="
-}
-
-# Single SERVICE backup function (extracted from backup_blockchain)
-backup_blockchain_single() {
-    # This is the original backup_blockchain logic for single SERVICE
-    cd $SRCDIR
-
-show ""
-show "Main task started at $(date +%H:%M:%S)"
-log "start task backup pre"
-
-# Ensure both timestamps are valid numbers
-if [ -z "$srcsynctime" ] || [ -z "$destsynctime" ]; then
-    warn "Error: One of the timestamps is missing or invalid."
-    error "Exit"
-fi
-
-# Prevent overwrite if destination is newer (and no force flag set)
-if [ "$srcsynctime" -lt "$destsynctime" ] && [ ! "$FORCE" ]; then
-    show "Destination is newer (and maybe higher) than the source."
-    show "      Better use RESTORE. A force will ignore this situation. End."
-    log "! src-dest comparing triggers abort"
-    exit 1
-elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
-    show "Destination is newer than the source."
-    show "      Force will now overwrite it. This will downgrade the destination."
-    log "src-dest downgrade forced"
-fi
-
-    # Service-specific file copying and folder setup
-    if [ "$SERVICE" == "bitcoind" ]; then
-        cp -u anchors.dat banlist.json debug*.log fee_estimates.dat h[0-9]* mempool.dat peers.dat ${DESTDIR}/ 2>/dev/null || true
-        cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$HOSTNAME
-        cp -u settings.json ${DESTDIR}/settings.json.$HOSTNAME
-        folder[1]="blocks"; folder[2]="chainstate"
-        [ -f "${SRCDIR}/indexes/coinstats/db/CURRENT" ] && folder[3]="indexes" || { folder[3]="indexes/blockfilter"; folder[4]="indexes/txindex"; }
-    elif [ "$SERVICE" == "monerod" ]; then
-        cp -u "bitmonero*.log h[0-9]* p2pstate.* rpc_ssl.*" ${DESTDIR}/
-        folder[1]="lmdb"
-    elif [ "$SERVICE" == "chia" ]; then
-        folder[1]=".chia"; folder[2]=".chia_keys"; folder[3]="plots"
-    fi
-
-i=1
-while [ "${folder[i]}" != "" ]; do
-    show "------------------------------------------------------------"
-    show "Start backup job: $SERVICE/${folder[i]}"
-    log "start task backup main"
-    ionice -c 2 \
-    rsync \
-        ${RSYNC_OPTS} \
-        --exclude '.nobakup' \
-        ${SRCDIR}/${folder[i]}/ ${DESTDIR}/${folder[i]}/
-    [ $? -ne 0 ] && warn "Error: During backup ${DESTDIR}/${folder[i]}." && vlog "task backup ${folder[i]} fail"
-    sync
-    ((i++))
-done
-show "------------------------------------------------------------"
-log "end task backup main"
-}
 # --- main logic end
 
 log "Script finished successfully"
