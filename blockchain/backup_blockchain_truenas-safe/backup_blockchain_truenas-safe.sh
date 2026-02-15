@@ -7,7 +7,7 @@ set -euo pipefail
 # NOTE: All scripts (gold/pro/safe/pacman) and *.conf files
 #       live together in $HOME/scripts - keep them compatible!
 #
-# Supported services:
+# Supported apps/services:
 #   - bitcoind
 #   - monerod
 #   - chia
@@ -15,7 +15,7 @@ set -euo pipefail
 #   - mempool
 #
 # Author: mratix, 1644259+mratix@users.noreply.github.com
-version="260213-safe"
+version="260215-safe"
 # ============================================================
 
 echo "-------------------------------------------------------------------------------"
@@ -47,7 +47,6 @@ today=$(date +%y%m%d)
 now=$(date +%y%m%d%H%M%S)
 NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE
 SERVICE=""
-TARGET_SERVICE=$SERVICE # only for full node backup (all services)
 RESTORE=false
 is_mounted=false
 FORCE=false
@@ -60,9 +59,9 @@ SRCDIR=""
 DESTDIR=""
 srcsynctime=""
 destsynctime=""
+use_usb=false
 USBDEV="/dev/sdf1"
 USB_MOUNTP=/mnt/usb
-use_usb=false
 RSYNC_OPTS=""
 
 
@@ -105,7 +104,7 @@ validate_height() {
         *)
             # undefined case, exit
             warn "Error: Invalid argument '$1'"
-            show "Usage: $0 btc|xmr|xch|electrs|mempool|<servicename> <height>|all|restore|verbose|force|mount|umount"
+            show "Usage: $0 btc|xmr|xch|electrs|mempool|<servicename> <height>|restore|verbose|force|mount|umount"
             exit 1
         ;;
     esac
@@ -179,31 +178,6 @@ unmount_dest(){
         [ $? -eq 0 ] && umount $NAS_MOUNTP || is_mounted=false
 }
 
-# Enhanced prepare, for single SERVICE
-prepare_single_service() {
-    local blockchain_type="${1:-$TARGET_SERVICE}"
-
-    # Map blockchain type to SERVICE if needed
-    case "$blockchain_type" in
-        btc) SERVICE="bitcoind" ;;
-        xmr) SERVICE="monerod" ;;
-        xch) SERVICE="chia" ;;
-        electrs) SERVICE="electrs" ;;
-        mempool) SERVICE="mempool" ;;
-        *) SERVICE="$blockchain_type" ;;
-    esac
-
-    # ZFS POOL/DATASET from config (required for safe version)
-    if [[ -z "$ZFS_POOL" ]]; then
-        error "ZFS_POOL not configured in safe.conf"
-    fi
-
-    POOL="$ZFS_POOL"
-    DATASET="$POOL/$ZFS_DATASET"
-    is_zfs=true
-
-    vlog "SERVICE=$SERVICE, POOL=$POOL, DATASET=$DATASET"
-}
 
 # --- evaluate environment
 prepare() {
@@ -217,7 +191,25 @@ else
     RSYNC_OPTS="-avLhx --numeric-ids --mkpath --delete --stats --info=progress2"
 fi
 
-prepare_single_service
+# prepare a single SERVICE
+    # Map blockchain type to SERVICE if needed
+    case "$BLOCKCHAIN" in
+        btc) SERVICE="bitcoind" ;;
+        xmr) SERVICE="monerod" ;;
+        xch) SERVICE="chia" ;;
+        *) SERVICE="$BLOCKCHAIN" ;;
+    esac
+
+    # ZFS POOL/DATASET from config (required for safe version)
+    if [[ -z "$ZFS_POOL" ]]; then
+        error "ZFS_POOL not configured in safe.conf"
+    fi
+
+    POOL="$ZFS_POOL"
+    DATASET="$POOL/$ZFS_DATASET"
+    is_zfs=true
+
+    vlog "SERVICE=$SERVICE, POOL=$POOL, DATASET=$DATASET"
 
 # construct paths
     NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE # redefine share, recheck is new $NAS_SHARE mounted
@@ -413,7 +405,7 @@ fi
         monerod)  min_height=3000000 ;;  # Monero ~3.5M, min ~3M
         chia)     min_height=800000 ;;   # Chia ~834k, min ~800k
         electrs)   min_height=700000 ;;   # Electrs follows Bitcoin
-        *)         min_height=100000 ;;   # Default fallback
+        *)         min_height=111111 ;;   # Default fallback
     esac
 
     # Check if height needs to be set (either too low or zero)
@@ -620,7 +612,7 @@ log "script end"
 # --- main logic
 
 # not args given
-[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|mempool|<servicename> <height>|all|restore|verbose|debug|force|mount|umount"; exit 1; }
+[ $# -eq 0 ] && { show "Arguments needed: btc|xmr|xch|electrs|mempool|<servicename> <height>|restore|verbose|debug|force|mount|umount"; exit 1; }
 
 # Enhanced argument parsing with getopts
 usage() {
@@ -654,8 +646,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         # Commands (no arguments)
         btc|xmr|xch)
-            [[ -n "$TARGET_SERVICE" ]] && { error "Multiple blockchain types specified"; }
-            TARGET_SERVICE="$1"
             case "$1" in
                 btc) SERVICE="bitcoind" ;;
                 xmr) SERVICE="monerod" ;;
@@ -664,8 +654,6 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         bitcoind|monerod|chia|electrs|mempool)
-            [[ -n "$TARGET_SERVICE" ]] && { error "Multiple SERVICEs specified"; }
-            TARGET_SERVICE="$1"
             SERVICE="$1"
             shift
             ;;
@@ -694,7 +682,6 @@ while [[ $# -gt 0 ]]; do
         -s|--service)
             [[ -z "${2:-}" ]] && { error "--SERVICE requires a value"; }
             SERVICE="$2"
-            TARGET_SERVICE="$2"
             shift 2
             ;;
         # Boolean flags
@@ -712,10 +699,6 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         # Aliases and special cases
-        all|--full)
-            full_mode=true
-            shift
-            ;;
         help|--help|-h)
             usage
             exit 0
@@ -727,16 +710,7 @@ while [[ $# -gt 0 ]]; do
         # Legacy/positional argument support
         *)
             # Handle positional arguments for backward compatibility
-            if [[ -z "$TARGET_SERVICE" ]] && [[ "$1" =~ ^(btc|xmr|xch|bitcoind|monerod|chia)$ ]]; then
-                TARGET_SERVICE="$1"
-                case "$1" in
-                    btc) SERVICE="bitcoind" ;;
-                    xmr) SERVICE="monerod" ;;
-                    xch) SERVICE="chia" ;;
-                    *) SERVICE="$1" ;;
-                esac
-                shift
-            elif [[ "$1" =~ ^[0-9]+$ ]]; then
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
                 HEIGHT="$1"
                 shift
             elif [[ "$1" == "force" ]]; then
@@ -789,10 +763,9 @@ exit 0
 
 # ------------------------------------------------------------------------
 # todos
-# todo: add full backup (all services) for gold/enterprise version, remove from safe version
-# TODO: move SERVICE_CONFIGS mapping to gold/enterprise version
-# TODO: implement host/SERVICE auto-detection from SERVICE_CONFIGS
-# todo: apply functional blockheight logfile-parsing to gold/enterprise version
+# todo: add full node backup (all services) to pro version, remove from safe version
+# TODO: move SERVICE_CONFIGS mapping to pro version
+# todo: apply this functional blockheight logfile-parsing to pro version
 # ------------------------------------------------------------------------
 # errors
 
