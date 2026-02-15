@@ -39,7 +39,7 @@ set -euo pipefail
 #
 LOGFILE="${LOGFILE:-/var/log/backup_blockchain.log}"
 STATEFILE="${STATEFILE:-/var/log/backup_blockchain.state}"
-RSYNC_OPTS=(-avihH --numeric-ids --mkpath --delete --stats --info=progress2)
+RSYNC_OPTS=(-aLx --numeric-ids --mkpath --delete --stats --info=progress2)
 RSYNC_EXCLUDES=(
   --exclude='/.zfs'
   --exclude='/.zfs/**'

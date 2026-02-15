@@ -157,11 +157,11 @@ backup_blockchain_truenas-safe.sh btc --debug
 
 ```
 backup_blockchain_truenas-safe/
-├── backup_blockchain_truenas-safe.sh    # Main script
-├── backup_blockchain_truenas-safe.conf  # Configuration file
-├── test_backup_blockchain.sh           # Test suite
-├── deploy_backup_blockchain.sh         # Deployment script
-└── README.md                           # This documentation
+├── backup_blockchain_truenas-safe.sh  # Main script
+├── safe.conf                          # Configuration file
+├── test_backup_blockchain.sh          # Test suite
+├── deploy_backup_blockchain.sh        # Deployment script
+└── README.md                          # This documentation
 ```
 
 ## Troubleshooting

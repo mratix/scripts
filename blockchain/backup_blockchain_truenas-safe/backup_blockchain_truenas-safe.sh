@@ -217,9 +217,9 @@ log "script started"
 
 # rsync options
 if [[ "$VERBOSE" == true ]]; then
-    RSYNC_OPTS="-avz -P --update --stats --delete --info=progress2"
+    RSYNC_OPTS="-aLx --numeric-ids --mkpath --delete --stats --info=progress2"
 else
-    RSYNC_OPTS="-avz --update --delete"
+    RSYNC_OPTS="-avLhx --numeric-ids --mkpath --delete --stats --info=progress2"
 fi
 
 if [[ "$full_mode" == true ]]; then
