@@ -68,11 +68,11 @@ sudo nano backup_blockchain_truenas-safe.conf
 
 ## Supported Services
 
-| Service | TrueNAS Release Names | Data Paths |
-|---------|---------------------|------------|
-| Bitcoin | `bitcoind-knots`, `bitcoin-knots`, `bitcoind`, `bitcoin` | `blocks/`, `chainstate/`, `indexes/` |
-| Monero | `monerod`, `monero`, `monerod-knots` | `lmdb/` |
-| Chia | `chia`, `chia-blockchain`, `chia-mainnet` | `.chia/`, `.chia/keys/`, `plots/` |
+| Blockchain | Service | TrueNAS App Names | Data Paths |
+|------------|---------|-------------------|------------|
+| Bitcoin    | `bitcoind`| `bitcoin`, `bitcoin-knots` | `blocks/`, `chainstate/`, `indexes/` |
+| Monero     | `monerod` | `monero` | `lmdb/` |
+| Chia       | `chia`    | `chia-mainnet` | `.chia/`, `.chia/keys/`, `plots/` |
 
 ## Safety Features
 
