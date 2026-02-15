@@ -23,10 +23,9 @@ echo "Backup blockchain and or services to NAS/USB (safe version)"
 THIS_HOST=$(hostname -s)
 
 # --- globals (override via safe.conf)
-NAS_USER="" NAS_HOST="" NAS_HOSTNAME="" NAS_SHARE="" ZFS_POOL="" ZFS_DATASET=""
-DEFAULT_MOUNTPATH="" USB_DEVICE="" USB_MOUNTP=/mnt/usb
-RSYNC_OPTS="" LOG_FORMAT="" LOG_LEVELS="" SRCDIR="" DESTDIR=""
-
+NAS_USER="" NAS_HOST="" NAS_HOSTNAME="" NAS_SHARE="" POOL="" DATASET=""
+DEFAULT_MOUNTPATH="" USB_DEVICE="" USB_ID="" USB_MOUNT="" RSYNC_OPTS=""
+LOG_FORMAT="" LOG_LEVELS="" SRCDIR="" DESTDIR="" SRC_BASE="" DEST_BASE=""
 
 # --- Load external configuration (see safe.conf.example)
 scriptdir="$(dirname "$(readlink -f "$0")")"
@@ -40,9 +39,11 @@ NAS_USER="${NAS_USER:-}"
 NAS_HOST="${NAS_HOST:-}"
 NAS_HOSTNAME="${NAS_HOSTNAME:-}"
 NAS_SHARE="${NAS_SHARE:-blockchain}"
-ZFS_POOL="${ZFS_POOL:-tank}"
-ZFS_DATASET="${ZFS_DATASET:-blockchain}"
-NAS_MOUNTP="${DEFAULT_MOUNTPATH:-/mnt/$NAS_HOSTNAME/$NAS_SHARE}"
+POOL="${POOL:-tank}"
+DATASET="${DATASET:-blockchain}"
+NAS_MOUNT="${DEFAULT_MOUNTPATH:-/mnt/$NAS_HOSTNAME/${NAS_SHARE}}"
+SRC_BASE="${SRC_BASE:-/mnt/$POOL/$DATASET}"
+DEST_BASE="${NAS_MOUNT:-/mnt/$NAS_HOSTNAME/${NAS_SHARE}}"
 
 # --- runtime defaults
 today=$(date +%y%m%d)
@@ -114,27 +115,27 @@ validate_height() {
 mount_dest(){
 vlog "__mount_dest__"
 
-[ ! -d "$NAS_MOUNTP" ] && mkdir -p $NAS_MOUNTP
+[ ! -d "${NAS_MOUNT}" ] && mkdir -p ${NAS_MOUNT}
 if [[ "$use_usb" == true ]]; then
     mount_usb
 else
     # mount nas share
-    if mount | grep -q "$NAS_MOUNTP"; then
+    if mount | grep -q "${NAS_MOUNT}"; then
         log "Network share already mounted"
-    elif mount -t cifs -o user="$NAS_USER" "//$NAS_HOST/$NAS_SHARE" "$NAS_MOUNTP"; then
+    elif mount -t cifs -o user="$NAS_USER" "//$NAS_HOST/${NAS_SHARE}" "${NAS_MOUNT}"; then
         log "Network share mounted successfully"
     else
-        error "Failed to mount network share //${NAS_HOST}/${NAS_SHARE} to ${NAS_MOUNTP}"
+        error "Failed to mount network share //${NAS_HOST}/${NAS_SHARE} to ${NAS_MOUNT}"
     fi
     sleep 2
-    if [ -f "$NAS_MOUNTP/$NAS_HOSTNAME.dummy" ] && [ -f "$NAS_MOUNTP/dir.dummy" ]; then
-        show "$NAS_MOUNTP is a valid backup storage."
+    if [ -f "${NAS_MOUNT}/$NAS_HOSTNAME.dummy" ] && [ -f "${NAS_MOUNT}/dir.dummy" ]; then
+        show "${NAS_MOUNT} is a valid backup storage."
     else
-        error "$NAS_MOUNTP validation failed - check dummy files"
+        error "${NAS_MOUNT} validation failed - check dummy files"
     fi
-    if [ ! -w "$NAS_MOUNTP/" ]; then
-        warn "Error: Destination $NAS_MOUNTP on //$NAS_HOST/$NAS_SHARE is NOT writable."
-        error "$NAS_MOUNTP write permissions deny"
+    if [ ! -w "${NAS_MOUNT}/" ]; then
+        warn "Error: Destination ${NAS_MOUNT} on //$NAS_HOST/${NAS_SHARE} is NOT writable."
+        error "${NAS_MOUNT} write permissions deny"
     fi
     is_mounted=true
 fi
@@ -143,34 +144,34 @@ fi
 
 # --- mount usb device
 mount_usb(){
-    [ ! -d "$USB_MOUNTP" ] && mkdir -p $USB_MOUNTP
-    if mount | grep -q $USB_MOUNTP; then
+    [ ! -d "${USB_MOUNT}" ] && mkdir -p ${USB_MOUNT}
+    if mount | grep -q ${USB_MOUNT}; then
         log "USB already mounted"
-    elif mount "$USB_DEVICE" $USB_MOUNTP; then
+    elif mount "${USB_DEVICE}" ${USB_MOUNT}; then
         log "USB mounted successfully"
     else
-        error "Failed to mount $USB_DEVICE to $USB_MOUNTP"
+        error "Failed to mount ${USB_DEVICE} to ${USB_MOUNT}"
     fi
     sleep 2
-    if [ ! -f "$USB_MOUNTP/usb.dummy" ]; then
+    if [ ! -f "${USB_MOUNT}/usb.dummy" ]; then
         error "Mounted disk is not valid and/or not prepared as backup storage!"
     fi
-    if [ ! -w "$USB_MOUNTP/" ]; then
-        warn "Error: Disk $USB_MOUNTP is NOT writable!"
-        error "$USB_MOUNTP write permissions deny"
+    if [ ! -w "${USB_MOUNT}/" ]; then
+        warn "Error: Disk ${USB_MOUNT} is NOT writable!"
+        error "${USB_MOUNT} write permissions deny"
     fi
     is_mounted=true
     show "USB disk is (now) mounted and valid backup storage."
-    log "$USB_MOUNTP mounted, valid"
+    log "${USB_MOUNT} mounted, valid"
 }
 
 
 # --- unmount destination
 unmount_dest(){
         sync
-        df -h | grep $NAS_SHARE
-        mount | grep $NAS_MOUNTP >/dev/null
-        [ $? -eq 0 ] && umount $NAS_MOUNTP || is_mounted=false
+        df -h | grep ${NAS_SHARE}
+        mount | grep ${NAS_MOUNT} >/dev/null
+        [ $? -eq 0 ] && umount ${NAS_MOUNT} || is_mounted=false
 }
 
 
@@ -185,34 +186,10 @@ else
     RSYNC_OPTS="-avLhx --numeric-ids --mkpath --delete --stats --info=progress2"
 fi
 
-# prepare a single SERVICE
-    # Map blockchain type to SERVICE if needed
-    case "$BLOCKCHAIN" in
-        btc) SERVICE="bitcoind" ;;
-        xmr) SERVICE="monerod" ;;
-        xch) SERVICE="chia" ;;
-        *) SERVICE="$BLOCKCHAIN" ;;
-    esac
-
-    # ZFS ZFS_POOL/ZFS_DATASET from config (required for safe version)
-    if [[ -z "$ZFS_POOL" ]]; then
-        error "ZFS_POOL not configured in safe.conf, not set in variables"
-    fi
-
-    ZFS_POOL="$ZFS_POOL"
-    ZFS_DATASET="$ZFS_POOL/$ZFS_DATASET"
-    is_zfs=true
-
-    vlog "SERVICE=$SERVICE, ZFS_POOL=$ZFS_POOL, ZFS_DATASET=$ZFS_DATASET"
-
 # construct paths
-    NAS_MOUNTP=/mnt/$NAS_HOSTNAME/$NAS_SHARE # redefine share, recheck is new $NAS_SHARE mounted
-    SRCDIR=/mnt/$ZFS_DATASET/$SERVICE
-    DESTDIR=$NAS_MOUNTP/$SERVICE
-    [[ "$RESTORE" == true ]] && SRCDIR=/mnt/$ZFS_DATASET/$SERVICE
-# case to usb disk (case restore from network to usb not needed)
-    [[ "$use_usb" == true ]] && DESTDIR=/mnt/usb/$NAS_SHARE/$SERVICE
-
+    [[ "$RESTORE" == false ]] && SRCDIR=${SRC_BASE}/${SERVICE} DESTDIR=${DEST_BASE}/${SERVICE}
+    [[ "$RESTORE" == true ]] && DESTDIR=${SRC_BASE}/${SERVICE} SRCDIR=${DEST_BASE}/${SERVICE}
+    [[ "$use_usb" == true ]] && DESTDIR=${USB_MOUNT}/${NAS_SHARE}/${SERVICE}
 
 # output results
     show "------------------------------------------------------------"
@@ -221,7 +198,7 @@ fi
     show "Source path             : ${SRCDIR}"
     show "Destination path        : ${DESTDIR}"
     show "------------------------------------------------------------"
-    log "Backup direction: $SRCDIR > $DESTDIR"
+    log "Backup direction: ${SRCDIR} > ${DESTDIR}"
 
     show "Please check paths (continuing in 5 seconds)..."
     sleep 5
@@ -240,18 +217,18 @@ vlog "__prestop__"
     local check_interval=10
 
     while [ $elapsed -lt $timeout ]; do
-        if [ -f "${SRCDIR}/$SERVICE.pid" ]; then
+        if [ -f "${SRCDIR}/${SERVICE}.pid" ]; then
             show "  Wait for process to stop... (${elapsed}s elapsed)"
             sleep $check_interval
             ((elapsed += check_interval))
         else
-            show "Great, service $SERVICE is down."
+            show "Great, service ${SERVICE} is down."
             break
         fi
     done
 
 # service check, final verification
-if [ -f "${SRCDIR}/$SERVICE.pid" ]; then
+if [ -f "${SRCDIR}/${SERVICE}.pid" ]; then
     show "Warning: Service may still be running after $timeout seconds."
     show "Please verify manually that ${SERVICE} is stopped before proceeding."
     read -r -p "Continue anyway? (y/N): " -t 30 confirm
@@ -272,15 +249,15 @@ latest_manifest() {
 
 # --- compare src-dest times
 compare() {
-    if [ "$SERVICE" = "bitcoind" ]; then
-        srcfile=$(latest_manifest "$SRCDIR")
-        destfile=$(latest_manifest "$DESTDIR")
-    elif [ "$SERVICE" = "monerod" ]; then
-        srcfile="$SRCDIR/lmdb/data.mdb"
-        destfile="$DESTDIR/lmdb/data.mdb"
-    elif [ "$SERVICE" = "chia" ]; then
-        srcfile="$SRCDIR/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
-        destfile="$DESTDIR/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
+    if [ "${SERVICE}" = "bitcoind" ]; then
+        srcfile=$(latest_manifest "${SRCDIR}")
+        destfile=$(latest_manifest "${DESTDIR}")
+    elif [ "${SERVICE}" = "monerod" ]; then
+        srcfile="${SRCDIR}/lmdb/data.mdb"
+        destfile="${DESTDIR}/lmdb/data.mdb"
+    elif [ "${SERVICE}" = "chia" ]; then
+        srcfile="${SRCDIR}/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
+        destfile="${DESTDIR}/.chia/mainnet/db/blockchain_v2_mainnet.sqlite"
     fi
 
     srcsynctime=$(stat -c %Y "$srcfile")
@@ -289,11 +266,11 @@ compare() {
     show "------------------------------------------------------------"
     show "Remote backup : $(date -d "@$destsynctime")"
     show "Local data    : $(date -d "@$srcsynctime")"
-    if (( destsynctime > srcsynctime )); then
+    if (( $destsynctime > $srcsynctime )); then
         show "Attention: Remote backup is newer than local data."
     fi
     if [ "$destfile" -nt "$srcfile" ]; then
-        return 1    # backup newer
+        return 1    # backup is newer
     else
         return 0    # local newer or equal
     fi
@@ -305,7 +282,7 @@ get_block_height() {
     local parsed_height=0
 
     # First try: parse from current log file
-    case "$SERVICE" in
+    case "${SERVICE}" in
         bitcoind)
             if [ -f "${SRCDIR}/debug.log" ]; then
                 vlog "Looking for height in ${SRCDIR}/debug.log"
@@ -380,7 +357,7 @@ get_block_height() {
 
 # --- pre-tasks, update height-stamps
 prebackup(){
-cd $SRCDIR
+cd ${SRCDIR}
 
 compare
 rc=$?
@@ -391,12 +368,12 @@ fi
 
     # Service-specific minimum reasonable heights
     local min_height=0
-    case "$SERVICE" in
-        bitcoind) min_height=700000 ;;   # Bitcoin ~800k, min ~700k
+    case "${SERVICE}" in
+        bitcoind) min_height=900000 ;;   # Bitcoin ~936k, min ~900k
         monerod)  min_height=3000000 ;;  # Monero ~3.5M, min ~3M
-        chia)     min_height=800000 ;;   # Chia ~834k, min ~800k
-        electrs)   min_height=700000 ;;   # Electrs follows Bitcoin
-        *)         min_height=111111 ;;   # Default fallback
+        chia)     min_height=800000 ;;   # Chia ~945k, min ~800k
+        electrs)  min_height=900000 ;;   # Electrs follows Bitcoin
+        *)        min_height=111111 ;;   # Default fallback
     esac
 
     # Check if height needs to be set (either too low or zero)
@@ -411,7 +388,7 @@ fi
             show "Using detected height."
         else
             # Show log snippets for manual reference
-            show "Height too low for $SERVICE (minimum: $min_height)"
+            show "Height too low for ${SERVICE} (minimum: $min_height)"
             show "Showing recent log entries for manual height setting..."
             # bitcoind
             [ -f ${SRCDIR}/debug.log ] && tail -n20 debug.log | grep UpdateTip
@@ -435,7 +412,7 @@ fi
         show "Last backuped height         : $(find ${SRCDIR} -maxdepth 1 -name "h[0-9]*" 2>/dev/null | xargs -n1 basename 2>/dev/null | sed -e 's/\..*$//' | tr '\n' ' ' || echo "None")"
         show "Current detected height      : $detected_height"
         show "Current configured height    : $HEIGHT"
-        show "Minimum reasonable height    : $min_height"
+        #show "Minimum reasonable height    : $min_height"
     fi
 
     # Validate height before proceeding
@@ -451,9 +428,9 @@ show "Rotate log file started at $(date +%H:%M:%S)"
     cd ${SRCDIR}
 
     # Validate source directory exists and is writable
-    if [[ ! -w "$SRCDIR" ]]; then
-        warn "Error: Source directory $SRCDIR is not writable."
-        error "SRCDIR $SRCDIR not writable"
+    if [[ ! -w "${SRCDIR}" ]]; then
+        warn "Error: Source directory ${SRCDIR} is not writable."
+        error "SRCDIR ${SRCDIR} not writable"
     fi
 
     # Move existing height stamp files more safely
@@ -490,11 +467,11 @@ snapshot(){
 show "Hint: Best time to take a snapshot is now."
 # snapshot zfs dataset
 if [ "$is_zfs" ]; then
-    show "Prepare dataset $ZFS_DATASET for a snapshot..."
+    show "Prepare dataset $DATASET for a snapshot..."
     sync
     sleep 1
     snapname="script-$(date +%Y-%m-%d_%H-%M)"
-    zfs snapshot -r ${ZFS_DATASET}@${snapname} 2>/dev/null || true
+    zfs snapshot -r $POOL/$DATASET/$SERVICE@$snapname 2>/dev/null || true
     log "Snapshot '$snapname' was taken."
 fi
 }
@@ -510,7 +487,7 @@ reset_folders_array() {
 
 # --- main rsync job
 backup_blockchain(){
-cd $SRCDIR
+cd ${SRCDIR}
 
 show ""
 show "Main task started at $(date +%H:%M:%S)"
@@ -535,7 +512,7 @@ elif [ "$srcsynctime" -lt "$destsynctime" ] && [ "$FORCE" ]; then
     log "src-dest downgrade forced"
 fi
 
-case "$SERVICE" in
+case "${SERVICE}" in
     bitcoind)
         cp -u anchors.dat banlist.json debug*.log fee_estimates.dat mempool.dat peers.dat ${DESTDIR}/ 2>/dev/null || true
         cp -u bitcoin.conf ${DESTDIR}/bitcoin.conf.$THIS_HOST
@@ -566,7 +543,7 @@ esac
 i=1
 while [ "${folder[i]}" != "" ]; do
     show "------------------------------------------------------------"
-    show "Start backup job: $SERVICE/${folder[i]}"
+    show "Start backup job: ${SERVICE}/${folder[i]}"
     log "start task backup main"
     ionice -c 2 \
     rsync \
@@ -579,7 +556,7 @@ while [ "${folder[i]}" != "" ]; do
 done
 reset_folders_array    # Array leeren
 show "------------------------------------------------------------"
-log "end task backup main"
+log "Main task ended at $(date +%H:%M:%S)"
 }
 
 
@@ -637,6 +614,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         # Commands (without arguments)
         btc|bitcoin|xmr|monero|xch|chia)
+            # Map blockchain to service
             case "$1" in
                 btc|bitcoin) BLOCKCHAIN=btc SERVICE="bitcoind" ;;
                 xmr|monero)  BLOCKCHAIN=xmr SERVICE="monerod" ;;
@@ -724,9 +702,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- execute part, based on parsed arguments
-if [[ -n "$SERVICE" ]]; then
+if [[ -n "${SERVICE}" ]]; then
     if [[ "$HEIGHT" -gt 0 ]]; then
-        validate_height "$HEIGHT" "$SERVICE" || exit 1
+        validate_height "$HEIGHT" "${SERVICE}" || exit 1
     fi
     [[ "$VERBOSE" == true ]] && show "SERVICE: $SERVICE, HEIGHT: $HEIGHT"
     prepare
@@ -736,9 +714,9 @@ if [[ -n "$SERVICE" ]]; then
     backup_blockchain
     postbackup
 elif [[ "$RESTORE" == true ]]; then
-    [[ "$FORCE" != true ]] && show "Task ignored. Force not given. Exit." && exit 1
+    [[ "$FORCE" != true ]] && error "Task ignored. Force not given. Exit." && exit 1
     show "------------------------------------------------------------"
-    show "RESTORE: Attention, the direction Source <-> Destination is now changed."
+    warn "Attention, RESTORE change the direction Source <-> Destination."
     vlog "direction is restore"
     prepare
     prestop
@@ -753,9 +731,8 @@ exit 0
 
 # ------------------------------------------------------------------------
 # todos
-# todo: add full node backup (all services) to pro version, remove from safe version
 # TODO: move SERVICE_CONFIGS mapping to pro version
-# todo: apply this functional blockheight logfile-parsing to pro version
+# todo: apply the functional blockheight logfile-parsing to pro version
 # ------------------------------------------------------------------------
 # errors
 
