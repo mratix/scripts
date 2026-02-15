@@ -72,7 +72,7 @@ sudo nano backup_blockchain_truenas-safe.conf
 |---------------|---------|-------------------|------------|
 | Bitcoin (btc) | `bitcoind`| `bitcoin`, `bitcoin-knots` | `blocks/`, `chainstate/`, `indexes/` |
 | Monero (xmr) | `monerod` | `monero` | `lmdb/` |
-| Chia (xch) | `chia` | `chia-mainnet` | `.chia/`, `.chia/keys/`, `plots/` |
+| Chia (xch) | `chia` | `chia`, `chia-mainnet` | `.chia/`, `.chia/keys/`, `plots/` |
 
 ## Safety Features
 
